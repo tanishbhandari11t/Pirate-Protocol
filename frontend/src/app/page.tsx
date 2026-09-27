@@ -1,0 +1,156 @@
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import Link from "next/link";
+import { useEffect, useState, type ReactNode } from "react";
+import { CompassRose } from "@/components/brand/CompassRose";
+import { Logo } from "@/components/brand/Logo";
+import { ArrowLeftIcon, FlagIcon, ShipIcon } from "@/components/icons";
+import { ConnectionLantern } from "@/components/layout/ConnectionLantern";
+import { Button } from "@/components/ui/Button";
+import { ParchmentBackdrop } from "@/components/ui/ParchmentBackdrop";
+import { InkFlourish } from "@/components/ui/ParchmentCard";
+
+type Stage = "intro" | "choose";
+
+const EASE = [0.22, 1, 0.36, 1] as const;
+
+export default function HarbourPage() {
+  const [stage, setStage] = useState<Stage>("intro");
+
+  useEffect(() => {
+    if (stage !== "choose") return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setStage("intro");
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [stage]);
+
+  return (
+    <main className="relative flex min-h-dvh flex-col overflow-clip">
+      <div className="absolute right-6 top-5 z-20 md:right-10">
+        <ConnectionLantern />
+      </div>
+
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 w-[min(95vmin,900px)] -translate-x-1/2 -translate-y-1/2"
+        initial={{ opacity: 0, scale: 0.8, rotate: -30 }}
+        animate={{ opacity: stage === "intro" ? 0.13 : 0.07, scale: stage === "intro" ? 1 : 1.25, rotate: 0 }}
+        transition={{ duration: 2.4, ease: EASE }}
+      >
+        <CompassRose className="animate-spin-slow" />
+      </motion.div>
+
+      <section className="relative z-10 flex flex-1 flex-col items-center justify-center px-4 pb-6 pt-16 sm:px-6">
+        <motion.div
+          layout
+          initial={{ opacity: 0, y: 30, filter: "blur(12px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ duration: 1.6, ease: EASE, layout: { duration: 1, ease: EASE } }}
+        >
+          <Logo size={stage === "intro" ? "xl" : "lg"} withTagline />
+        </motion.div>
+
+        <AnimatePresence mode="wait">
+          {stage === "intro" ? (
+            <motion.div
+              key="intro"
+              className="mt-[clamp(1.5rem,6vh,3.5rem)] flex flex-col items-center"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0, transition: { delay: 0.9, duration: 0.8, ease: EASE } }}
+              exit={{ opacity: 0, y: -10, transition: { duration: 0.35 } }}
+            >
+              <div className="relative">
+                <motion.span
+                  aria-hidden
+                  className="absolute -inset-4 rounded-md bg-gold/20 blur-2xl"
+                  animate={{ opacity: [0.35, 0.8, 0.35] }}
+                  transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
+                />
+                <Button
+                  size="xl"
+                  onClick={() => setStage("choose")}
+                  autoFocus
+                  className="max-sm:h-14 max-sm:px-8 max-sm:text-sm max-sm:tracking-[0.2em] tiny:h-14"
+                >
+                  Enter the Waters
+                </Button>
+              </div>
+              <p className="mt-[clamp(1rem,3vh,1.5rem)] max-w-md text-center font-body text-base italic text-parchment/60 sm:text-lg">
+                Gather a crew, decipher the living map, and outwit rival pirates for the buried hoard.
+              </p>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="choose"
+              className="mt-[clamp(1.25rem,4vh,3rem)] w-full max-w-4xl"
+              initial="hidden"
+              animate="show"
+              exit="hidden"
+              variants={{
+                hidden: { opacity: 0 },
+                show: { opacity: 1, transition: { staggerChildren: 0.14, delayChildren: 0.25 } },
+              }}
+            >
+              <div className="grid gap-5 md:grid-cols-2 md:gap-8">
+                <ChoiceCard
+                  href="/crew/create"
+                  icon={<FlagIcon size={34} />}
+                  eyebrow="Found a crew"
+                  title="Raise Your Colours"
+                  body="Name your ship, take the captain's hat, and share the code with your crew."
+                  cta="Create Crew"
+                  tilt={-1.5}
+                />
+                <ChoiceCard
+                  href="/crew/join"
+                  icon={<ShipIcon size={34} />}
+                  eyebrow="Answer the call"
+                  title="Board a Ship"
+                  body="Your captain gave you six runes. Climb aboard and claim your berth."
+                  cta="Join Crew"
+                  tilt={1.5}
+                />
+              </div>
+              <motion.div
+                variants={{ hidden: { opacity: 0 }, show: { opacity: 1 } }}
+                className="mt-[clamp(1rem,3vh,2.5rem)] flex justify-center"
+              >
+                <Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />} onClick={() => setStage("intro")}>
+                  Back to the shore
+                </Button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </section>
+
+      <AnimatePresence>
+        {stage === "choose" && <FogSweep key="sweep" />}
+      </AnimatePresence>
+
+      <footer className="relative z-10 flex items-end justify-center gap-4 px-6 pb-4 font-ui text-[0.55rem] uppercase tracking-[0.25em] text-brass/50 sm:justify-between sm:text-[0.6rem] sm:tracking-[0.3em] md:px-10">
+        <span className="hidden sm:inline">14°32′N · 61°05′W</span>
+        <Link href="/design" className="transition hover:text-brass-light">
+          The Shipwright&apos;s Almanac
+        </Link>
+        <span className="hidden sm:inline">Phase I · Anno MMXXVI</span>
+      </footer>
+    </main>
+  );
+}
+
+interface ChoiceCardProps {
+  href: string;
+  icon: ReactNode;
+  eyebrow: string;
+  title: string;
+  body: string;
+  cta: string;
+  tilt: number;
+}
+
+function ChoiceCard({ href, icon, eyebrow, title, body, cta, tilt }: ChoiceCardProps) {
+  return (
+    <motion.div
+      variants={{
