@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomStatus {
+  LOBBY
+  ACTIVE
+  FINISHED
+}
+
+enum PlayerStatus {
+  ACTIVE
+  LEFT
+}
+
+enum IslandKind {
+  NORMAL
+  TRAP
+  TREASURE
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  createdAt DateTime @default(now())
+  hosted    Room[]   @relation("RoomHost")
+  players   Player[]
+}
+
+model Room {
+  id         String      @id @default(cuid())
+  code       String      @unique
+  name       String
+  status     RoomStatus  @default(LOBBY)
+  maxPlayers Int         @default(6)
+  hostId     String
+  host       User        @relation("RoomHost", fields: [hostId], references: [id])
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  players    Player[]
+  events     GameEvent[]
+}
+
+model Player {
+  id              String       @id @default(cuid())
+  userId          String
+  roomId          String
+  user            User         @relation(fields: [userId], references: [id])
+  room            Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  status          PlayerStatus @default(ACTIVE)
+  isHost          Boolean      @default(false)
+  isOnline        Boolean      @default(true)
+  isEliminated    Boolean      @default(false)
+  strikes         Int          @default(0)
+  lastSeenAt      DateTime     @default(now())
+  currentIslandId String?
+  currentIsland   Island?      @relation(fields: [currentIslandId], references: [id])
+  joinedAt        DateTime     @default(now())
+  inventory       Inventory[]
+  events          GameEvent[]
+
+  @@unique([userId, roomId])
+  @@index([roomId, status])
+}
+
+model Island {
+  id          String     @id @default(cuid())
+  key         String     @unique
+  name        String
+  description String
+  x           Float
+  y           Float
+  order       Int
+  kind        IslandKind @default(NORMAL)
+  puzzles     Puzzle[]
+  players     Player[]
+}
+
+model Puzzle {
+  id         String  @id @default(cuid())
+  key        String  @unique
+  islandId   String
+  island     Island  @relation(fields: [islandId], references: [id], onDelete: Cascade)
+  prompt     String
+  cipher     String
+  answerHash String
+  rewardKey  String?
+  trapOnFail Boolean @default(false)
+  order      Int     @default(0)
+
+  @@index([islandId])
+}
+
+model Inventory {
+  id        String   @id @default(cuid())
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  itemKey   String
+  quantity  Int      @default(1)
+  metadata  Json
+  createdAt DateTime @default(now())
+
+  @@unique([playerId, itemKey])
+}
+
+model GameEvent {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  playerId  String?
+  player    Player?  @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([roomId, createdAt])
+}

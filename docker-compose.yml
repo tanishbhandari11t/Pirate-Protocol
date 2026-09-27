@@ -1,0 +1,21 @@
+name: pirate-protocol
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pirate
+      POSTGRES_PASSWORD: pirate
+      POSTGRES_DB: pirate_protocol
+    ports:
+      - "5433:5432"
+    volumes:
+      - pirate_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pirate -d pirate_protocol"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pirate_pg:
