@@ -1,0 +1,66 @@
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import type { ReactNode } from "react";
+import { AVATARS } from "@/lib/avatars";
+import type { AvatarId } from "@/lib/socket/contract";
+import { PirateAvatar } from "../avatar/PirateAvatar";
+import { Porthole } from "../avatar/Porthole";
+import { Badge } from "../ui/Ornaments";
+
+interface IdentityPreviewProps {
+  name: string;
+  avatarId: AvatarId;
+  role: string;
+  children?: ReactNode;
+}
+
+/** Live "wanted poster" style preview of the sailor being created. */
+export function IdentityPreview({ name, avatarId, role, children }: IdentityPreviewProps) {
+  const avatar = AVATARS[avatarId];
+  return (
+    <div className="flex flex-col items-center text-center">
+      <div className="relative">
+        <motion.div
+          aria-hidden
+          className="absolute -inset-10 rounded-full bg-[radial-gradient(circle,rgba(255,216,115,0.25),transparent_65%)]"
+          animate={{ opacity: [0.5, 1, 0.5] }}
+          transition={{ duration: 4, repeat: Infinity }}
+        />
+        <Porthole className="w-28 sm:w-36 lg:w-[clamp(9rem,26vh,16rem)]">
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={avatarId}
+              className="h-full w-full"
+              initial={{ rotate: -90, opacity: 0, scale: 1.2 }}
+              animate={{ rotate: 0, opacity: 1, scale: 1 }}
+              exit={{ rotate: 90, opacity: 0, scale: 0.8 }}
+              transition={{ type: "spring", stiffness: 180, damping: 20 }}
+            >
+              <PirateAvatar avatarId={avatarId} className="h-full w-full" />
+            </motion.div>
+          </AnimatePresence>
+        </Porthole>
+      </div>
+
+      <Badge tone="brass" className="mt-4 lg:mt-6 lg:short:mt-3">
+        {role}
+      </Badge>
+      <h3 className="mt-2 max-w-sm break-words font-display text-3xl leading-none text-gilded drop-shadow-[0_4px_10px_rgba(0,0,0,0.9)] lg:mt-3 lg:min-h-[1em] lg:text-[clamp(2.25rem,6vh,3rem)]">
+        {name || "Nameless"}
+      </h3>
+      <AnimatePresence mode="wait">
+        <motion.p
+          key={avatarId}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          className="mt-2 px-4 font-body text-base italic text-parchment/70 lg:text-lg"
+        >
+          {avatar.title} <span className="hidden sm:inline">— {avatar.epithet}</span>
+        </motion.p>
+      </AnimatePresence>
+      {children && <div className="mt-[clamp(1rem,3.5vh,2rem)] hidden w-full lg:block">{children}</div>}
+    </div>
+  );
+}

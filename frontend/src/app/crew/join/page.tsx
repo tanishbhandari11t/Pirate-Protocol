@@ -1,0 +1,97 @@
+"use client";
+
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState, type FormEvent } from "react";
+import { AvatarPicker } from "@/components/avatar/AvatarPicker";
+import { CrewFormShell } from "@/components/crew/CrewFormShell";
+import { IdentityPreview } from "@/components/crew/IdentityPreview";
+import { ShipIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { LoadingScreen } from "@/components/ui/Loader";
+import { useNotify } from "@/components/ui/Notifications";
+import { Divider } from "@/components/ui/Ornaments";
+import { ParchmentCard } from "@/components/ui/ParchmentCard";
+import { RoomCodeInput } from "@/components/ui/RoomCodeInput";
+import { TextField } from "@/components/ui/TextField";
+import { useCrew } from "@/lib/crew/CrewProvider";
+import { PLAYER_NAME_MAX, ROOM_CODE_LENGTH, type AvatarId } from "@/lib/socket/contract";
+import type { ClientErrorCode } from "@/lib/socket/client";
+import { describeError } from "@/lib/socket/errors";
+import { useProfile } from "@/lib/storage";
+import { normalizeName, sanitizeRoomCode, validatePlayerName, validateRoomCode } from "@/lib/validation";
+
+const CODE_ERRORS: ClientErrorCode[] = ["ROOM_NOT_FOUND", "ROOM_FULL", "GAME_IN_PROGRESS"];
+
+export default function JoinCrewPage() {
+  return (
+    <Suspense fallback={<LoadingScreen show message="Spotting sails" />}>
+      <JoinCrewForm />
+    </Suspense>
+  );
+}
+
+function JoinCrewForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { joinCrew } = useCrew();
+  const { notify } = useNotify();
+  const profile = useProfile();
+
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [avatarDraft, setAvatarDraft] = useState<AvatarId | null>(null);
+  const [roomCode, setRoomCode] = useState(() => sanitizeRoomCode(searchParams.get("code") ?? ""));
+  const [submitted, setSubmitted] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [serverError, setServerError] = useState<{ code: ClientErrorCode; message: string } | null>(null);
+
+  const playerName = nameDraft ?? profile?.playerName ?? "";
+  const avatarId = avatarDraft ?? profile?.avatarId ?? "navigator";
+  const codePrefilled = roomCode.length === ROOM_CODE_LENGTH && !submitted;
+
+  const serverCodeError =
+    serverError && CODE_ERRORS.includes(serverError.code) ? serverError.message : null;
+  const serverNameError = serverError?.code === "NAME_TAKEN" ? serverError.message : null;
+  const generalError = serverError && !serverCodeError && !serverNameError ? serverError.message : null;
+
+  const nameError = (submitted ? validatePlayerName(playerName) : null) ?? serverNameError;
+  const codeError = (submitted ? validateRoomCode(roomCode) : null) ?? serverCodeError;
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSubmitted(true);
+    setServerError(null);
+    if (validatePlayerName(playerName) || validateRoomCode(roomCode)) return;
+
+    setPending(true);
+    const res = await joinCrew({ playerName: normalizeName(playerName), avatarId, roomCode });
+
+    if (res.ok) {
+      router.push(`/lobby/${res.data.room.code}`);
+      return;
+    }
+    setPending(false);
+    const message = describeError(res.error.code, res.error.message);
+    setServerError({ code: res.error.code, message });
+    notify({ tone: "danger", title: "Could not board", message });
+  };
+
+  return (
+    <>
+      <CrewFormShell
+        form={
+          <ParchmentCard eyebrow="Request to come aboard" title="Board a Ship">
+            <form onSubmit={onSubmit} noValidate className="space-y-5 short:space-y-3">
+              <RoomCodeInput
+                value={roomCode}
+                onChange={(v) => {
+                  setRoomCode(v);
+                  setServerError(null);
+                }}
+                error={codeError}
+                autoFocus={!codePrefilled}
+              />
+              <TextField
+                label="Your pirate name"
+                placeholder="Anne Bonny"
+                value={playerName}
+                onChange={(e) => {

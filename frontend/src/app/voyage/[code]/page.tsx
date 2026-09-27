@@ -1,0 +1,81 @@
+"use client";
+
+import { motion } from "framer-motion";
+import { useParams, useRouter } from "next/navigation";
+import { useState } from "react";
+import { TopBar } from "@/components/layout/TopBar";
+import { TreasureMapSketch } from "@/components/map/TreasureMapSketch";
+import { DoorIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Ornaments";
+import { ParchmentCard } from "@/components/ui/ParchmentCard";
+import { useCrew } from "@/lib/crew/CrewProvider";
+import { bareShipName } from "@/lib/names";
+import { sanitizeRoomCode } from "@/lib/validation";
+
+/**
+ * Landing point after `game:started`. The interactive game board replaces this screen in Phase 2;
+ * until then it only confirms the crew made it out of harbour.
+ */
+export default function VoyagePage() {
+  const params = useParams<{ code: string }>();
+  const code = sanitizeRoomCode(params.code ?? "");
+  const router = useRouter();
+  const { state, leaveCrew } = useCrew();
+  const [leaving, setLeaving] = useState(false);
+  const crewName = state.room?.code === code ? state.room.crewName : null;
+
+  const leave = async () => {
+    setLeaving(true);
+    await leaveCrew();
+    router.push("/");
+  };
+
+  return (
+    <main className="flex min-h-dvh flex-col">
+      <TopBar>
+        <Badge tone="kelp">Ship {code}</Badge>
+      </TopBar>
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-4 pb-8 sm:px-6">
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 1 }}
+          className="mb-[clamp(1rem,3vh,2rem)] text-center"
+        >
+          <p className="font-ui text-[0.6rem] uppercase tracking-[0.3em] text-brass/80 sm:text-[0.65rem] sm:tracking-[0.45em]">
+            {crewName ? `The ${bareShipName(crewName)} has set sail` : "Your crew has set sail"}
+          </p>
+          <h1 className="mt-2 font-display text-[clamp(2.25rem,min(8vw,7vh),3.75rem)] leading-tight text-gilded">
+            The Map Awakens
+          </h1>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, rotateX: 50, y: 40 }}
+          animate={{ opacity: 1, rotateX: 0, y: 0 }}
+          transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
+          style={{
+            transformPerspective: 1400,
+            maxWidth: "max(18rem, min(100%, calc((100dvh - 22rem) * 1.5)))",
+          }}
+          className="w-full"
+        >
+          <ParchmentCard padded={false} className="w-full">
+            <div className="p-3 sm:p-5 md:p-8 short:md:p-5">
+              <TreasureMapSketch />
+            </div>
+          </ParchmentCard>
+        </motion.div>
+
+        <p className="mt-[clamp(1rem,3vh,2rem)] max-w-xl text-center font-body text-base italic text-parchment/70 sm:text-lg">
+          The cartographers are still inking the living map. When the board is ready, your crew will be
+          brought here to hunt.
+        </p>
+        <Button variant="ghost" className="mt-4 short:mt-3" icon={<DoorIcon size={14} />} onClick={leave} loading={leaving}>
+          Return to the harbour
+        </Button>
+      </div>
+    </main>
+  );
+}
