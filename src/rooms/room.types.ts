@@ -1,6 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { asRecord } from '../common/game-events';
 
+export type AdventurePhase = 'lobby' | 'countdown' | 'voyage' | 'finished';
+
 export interface InventoryView {
   itemKey: string;
   name: string;
@@ -12,7 +14,10 @@ export interface PublicPlayer {
   id: string;
   userId: string;
   username: string;
+  displayName: string;
+  avatarId: string | null;
   isHost: boolean;
+  isReady: boolean;
   isOnline: boolean;
   isEliminated: boolean;
   strikes: number;
@@ -40,15 +45,34 @@ export interface PublicIsland {
   puzzles: PublicPuzzle[];
 }
 
+export interface ActiveClue {
+  id: string;
+  text: string;
+  islandKey?: string;
+}
+
+export interface VaultSummary {
+  ready: boolean;
+  missingRelics: string[];
+}
+
 export interface SharedRoomState {
   code: string;
   name: string;
-  status: 'LOBBY' | 'ACTIVE' | 'FINISHED';
+  status: 'LOBBY' | 'COUNTDOWN' | 'ACTIVE' | 'FINISHED';
+  phase: AdventurePhase;
   maxPlayers: number;
   hostId: string;
   createdAt: string;
+  countdownEndsAt: string | null;
+  voyageStartedAt: string | null;
   players: PublicPlayer[];
   islands: PublicIsland[];
+  discoveredIslandKeys: string[];
+  exploredIslandKeys: string[];
+  activeClues: ActiveClue[];
+  scores: { playerId: string; points: number }[];
+  destinations: string[];
   progress: { playerId: string; puzzleKey: string }[];
   log: {
     id: string;
@@ -62,6 +86,29 @@ export interface SharedRoomState {
 
 export interface RoomState extends SharedRoomState {
   you: InventoryView[];
+  vault: VaultSummary;
+}
+
+export interface LobbyPlayerSnapshot {
+  id: string;
+  name: string;
+  avatarId: string | null;
+  isCaptain: boolean;
+  isReady: boolean;
+  isConnected: boolean;
+  joinedAt: string;
+}
+
+export interface LobbyRoomSnapshot {
+  code: string;
+  crewName: string;
+  phase: 'lobby' | 'countdown' | 'in-game' | 'finished';
+  captainId: string;
+  players: LobbyPlayerSnapshot[];
+  maxPlayers: number;
+  minPlayers: number;
+  createdAt: string;
+  countdownEndsAt: string | null;
 }
 
 export interface PresenceChanged {
@@ -70,6 +117,20 @@ export interface PresenceChanged {
   userId: string;
   online: boolean;
   lastSeenAt: string;
+}
+
+export function roomPhaseFromStatus(status: string): AdventurePhase {
+  if (status === 'LOBBY') return 'lobby';
+  if (status === 'COUNTDOWN') return 'countdown';
+  if (status === 'FINISHED') return 'finished';
+  return 'voyage';
+}
+
+export function lobbyPhaseFromStatus(status: string): LobbyRoomSnapshot['phase'] {
+  if (status === 'LOBBY') return 'lobby';
+  if (status === 'COUNTDOWN') return 'countdown';
+  if (status === 'FINISHED') return 'finished';
+  return 'in-game';
 }
 
 export function toInventoryView(row: {

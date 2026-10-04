@@ -10,6 +10,11 @@ export const GameEventType = {
   ITEM_GRANTED: 'ITEM_GRANTED',
   TRADED: 'TRADED',
   TREASURE_FOUND: 'TREASURE_FOUND',
+  VOYAGE_STARTED: 'VOYAGE_STARTED',
+  ISLAND_DISCOVERED: 'ISLAND_DISCOVERED',
+  ISLAND_EXPLORED: 'ISLAND_EXPLORED',
+  CLUE_FOUND: 'CLUE_FOUND',
+  ADVENTURE_NOTICE: 'ADVENTURE_NOTICE',
 } as const;
 
 export type GameEventTypeName = (typeof GameEventType)[keyof typeof GameEventType];

@@ -7,6 +7,7 @@ import { GameModule } from './game/game.module';
 import { HealthController } from './health.controller';
 import { PlayersModule } from './players/players.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { LobbyModule } from './lobby/lobby.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { RealtimeModule } from './websocket/realtime.module';
 import { WebsocketModule } from './websocket/websocket.module';
@@ -19,6 +20,7 @@ import { WebsocketModule } from './websocket/websocket.module';
     AuthModule,
     PlayersModule,
     RoomsModule,
+    LobbyModule,
     GameModule,
     WebsocketModule,
   ],

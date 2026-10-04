@@ -3,13 +3,15 @@ import { GameEventType, GameEventView, toEventView } from '../common/game-events
 import { isUniqueViolation } from '../common/prisma-errors';
 import { PlayersService } from '../players/players.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { START_ISLAND_KEY } from '../game/treasure/relics';
+import { resolveStartIsland } from '../game/map/start-island';
 import { RealtimeBus } from '../websocket/realtime-bus';
 import { makeRoomCode } from './room-code';
 import { RoomState } from './room.types';
 import { RoomStateService } from './room-state.service';
 
 const MAX_CREW = 6;
+
+type SeatProfile = { displayName: string; avatarId: string };
 
 @Injectable()
 export class RoomsService {
@@ -22,7 +24,134 @@ export class RoomsService {
     private readonly bus: RealtimeBus,
   ) {}
 
-  async create(userId: string, name?: string): Promise<RoomState> {
+  /** Lobby path: seat only — no voyage `room:state` load. */
+  async createWithProfile(
+    userId: string,
+    name: string,
+    profile: SeatProfile,
+  ): Promise<{ code: string; playerId: string }> {
+    await this.assertNotInCrew(userId);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = makeRoomCode();
+      try {
+        const playerId = await this.prisma.$transaction(async (tx) => {
+          const room = await tx.room.create({
+            data: {
+              code,
+              name: name?.trim() || `Crew ${code}`,
+              hostId: userId,
+              maxPlayers: MAX_CREW,
+            },
+          });
+          const start = await resolveStartIsland(tx);
+          const player = await tx.player.create({
+            data: {
+              userId,
+              roomId: room.id,
+              isHost: true,
+              isOnline: true,
+              currentIslandId: start?.id,
+              displayName: profile.displayName,
+              avatarId: profile.avatarId,
+            },
+          });
+          await tx.gameEvent.create({
+            data: {
+              roomId: room.id,
+              playerId: player.id,
+              type: GameEventType.PLAYER_JOINED,
+              payload: { userId },
+            },
+          });
+          return player.id;
+        });
+        this.logger.log(`Crew ${code} created`);
+        return { code, playerId };
+      } catch (error) {
+        if (isUniqueViolation(error)) continue;
+        throw error;
+      }
+    }
+
+    throw new ConflictException('Could not allocate a room code');
+  }
+
+  async joinWithProfile(
+    userId: string,
+    code: string,
+    profile: SeatProfile,
+  ): Promise<{ playerId: string }> {
+    const playerId = await this.prisma.$transaction(async (tx) => {
+      const room = await tx.room.findUnique({ where: { code } });
+      if (!room) throw new NotFoundException('Room not found');
+      if (room.status === 'FINISHED') throw new ConflictException('This hunt is over');
+      if (room.status !== 'LOBBY') throw new ConflictException('This hunt is already underway');
+
+      const elsewhere = await tx.player.findFirst({
+        where: { userId, status: 'ACTIVE', roomId: { not: room.id } },
+        select: { room: { select: { code: true } } },
+      });
+      if (elsewhere) throw new ConflictException(`Leave crew ${elsewhere.room.code} first`);
+
+      const existing = await tx.player.findUnique({
+        where: { userId_roomId: { userId, roomId: room.id } },
+      });
+      if (existing?.status === 'ACTIVE') {
+        await tx.player.update({
+          where: { id: existing.id },
+          data: {
+            isOnline: true,
+            lastSeenAt: new Date(),
+            displayName: profile.displayName,
+            avatarId: profile.avatarId,
+          },
+        });
+        return existing.id;
+      }
+
+      const count = await tx.player.count({ where: { roomId: room.id, status: 'ACTIVE' } });
+      if (count >= room.maxPlayers) throw new ConflictException('Crew is full');
+
+      const start = await resolveStartIsland(tx);
+      const player = existing
+        ? await tx.player.update({
+            where: { id: existing.id },
+            data: {
+              status: 'ACTIVE',
+              isOnline: true,
+              lastSeenAt: new Date(),
+              currentIslandId: existing.currentIslandId ?? start?.id,
+              displayName: profile.displayName,
+              avatarId: profile.avatarId,
+            },
+          })
+        : await tx.player.create({
+            data: {
+              userId,
+              roomId: room.id,
+              isHost: false,
+              isOnline: true,
+              currentIslandId: start?.id,
+              displayName: profile.displayName,
+              avatarId: profile.avatarId,
+            },
+          });
+
+      await tx.gameEvent.create({
+        data: {
+          roomId: room.id,
+          playerId: player.id,
+          type: GameEventType.PLAYER_JOINED,
+          payload: { userId },
+        },
+      });
+      return player.id;
+    });
+    return { playerId };
+  }
+
+  async create(userId: string, name?: string, profile?: SeatProfile): Promise<RoomState> {
     await this.assertNotInCrew(userId);
 
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -37,7 +166,7 @@ export class RoomsService {
               maxPlayers: MAX_CREW,
             },
           });
-          const start = await tx.island.findUnique({ where: { key: START_ISLAND_KEY } });
+          const start = await resolveStartIsland(tx);
           const player = await tx.player.create({
             data: {
               userId,
@@ -45,6 +174,8 @@ export class RoomsService {
               isHost: true,
               isOnline: true,
               currentIslandId: start?.id,
+              displayName: profile?.displayName,
+              avatarId: profile?.avatarId,
             },
           });
           const event = await tx.gameEvent.create({
@@ -68,15 +199,16 @@ export class RoomsService {
     throw new ConflictException('Could not allocate a room code');
   }
 
-  async join(userId: string, code: string) {
+  async join(userId: string, code: string, profile?: SeatProfile) {
     const fresh = await this.prisma.$transaction(async (tx) => {
       const room = await tx.room.findUnique({ where: { code } });
       if (!room) throw new NotFoundException('Room not found');
       if (room.status === 'FINISHED') throw new ConflictException('This hunt is over');
+      if (room.status !== 'LOBBY') throw new ConflictException('This hunt is already underway');
 
       const elsewhere = await tx.player.findFirst({
         where: { userId, status: 'ACTIVE', roomId: { not: room.id } },
-        include: { room: { select: { code: true } } },
+        select: { room: { select: { code: true } } },
       });
       if (elsewhere) throw new ConflictException(`Leave crew ${elsewhere.room.code} first`);
 
@@ -86,7 +218,12 @@ export class RoomsService {
       if (existing?.status === 'ACTIVE') {
         await tx.player.update({
           where: { id: existing.id },
-          data: { isOnline: true, lastSeenAt: new Date() },
+          data: {
+            isOnline: true,
+            lastSeenAt: new Date(),
+            displayName: profile?.displayName ?? existing.displayName,
+            avatarId: profile?.avatarId ?? existing.avatarId,
+          },
         });
         return [] as GameEventView[];
       }
@@ -94,7 +231,7 @@ export class RoomsService {
       const count = await tx.player.count({ where: { roomId: room.id, status: 'ACTIVE' } });
       if (count >= room.maxPlayers) throw new ConflictException('Crew is full');
 
-      const start = await tx.island.findUnique({ where: { key: START_ISLAND_KEY } });
+      const start = await resolveStartIsland(tx);
       const player = existing
         ? await tx.player.update({
             where: { id: existing.id },
@@ -103,6 +240,8 @@ export class RoomsService {
               isOnline: true,
               lastSeenAt: new Date(),
               currentIslandId: existing.currentIslandId ?? start?.id,
+              displayName: profile?.displayName ?? existing.displayName,
+              avatarId: profile?.avatarId ?? existing.avatarId,
             },
           })
         : await tx.player.create({
@@ -112,6 +251,8 @@ export class RoomsService {
               isHost: false,
               isOnline: true,
               currentIslandId: start?.id,
+              displayName: profile?.displayName,
+              avatarId: profile?.avatarId,
             },
           });
 
@@ -131,12 +272,15 @@ export class RoomsService {
 
   async leave(userId: string, code: string) {
     const fresh = await this.prisma.$transaction(async (tx) => {
-      const room = await tx.room.findUnique({ where: { code } });
-      if (!room) throw new NotFoundException('Room not found');
-      const player = await tx.player.findUnique({
-        where: { userId_roomId: { userId, roomId: room.id } },
+      const player = await tx.player.findFirst({
+        where: { userId, status: 'ACTIVE', room: { code } },
+        select: { id: true, roomId: true },
       });
-      if (!player || player.status !== 'ACTIVE') throw new ForbiddenException('You are not in this crew');
+      if (!player) {
+        const room = await tx.room.findUnique({ where: { code }, select: { id: true } });
+        if (!room) throw new NotFoundException('Room not found');
+        throw new ForbiddenException('You are not in this crew');
+      }
 
       await tx.player.update({
         where: { id: player.id },
@@ -144,7 +288,7 @@ export class RoomsService {
       });
       const event = await tx.gameEvent.create({
         data: {
-          roomId: room.id,
+          roomId: player.roomId,
           playerId: player.id,
           type: GameEventType.PLAYER_LEFT,
           payload: { userId },
@@ -158,8 +302,11 @@ export class RoomsService {
   }
 
   async get(userId: string, code: string) {
-    await this.assertMember(userId, code);
-    return this.state.forUser(code, userId);
+    const state = await this.state.forUser(code, userId);
+    if (!state.players.some((player) => player.userId === userId)) {
+      throw new ForbiddenException('Join the crew first');
+    }
+    return state;
   }
 
   async presence(userId: string, code: string, online: boolean) {
@@ -176,12 +323,4 @@ export class RoomsService {
     if (elsewhere) throw new ConflictException(`Leave crew ${elsewhere.room.code} first`);
   }
 
-  private async assertMember(userId: string, code: string) {
-    const room = await this.prisma.room.findUnique({ where: { code } });
-    if (!room) throw new NotFoundException('Room not found');
-    const player = await this.prisma.player.findFirst({
-      where: { userId, roomId: room.id, status: 'ACTIVE' },
-    });
-    if (!player) throw new ForbiddenException('Join the crew first');
-  }
 }

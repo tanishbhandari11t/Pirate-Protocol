@@ -8,6 +8,9 @@ import { hashAnswer, normalizeAnswer } from './answer';
 import { ITEM_CATALOG } from '../inventory/catalog';
 import { applyStrike } from '../traps/traps';
 import { REQUIRED_RELICS, missingRelics } from '../treasure/relics';
+import { canTravel, destinationsFrom } from '../map/routes';
+import { scoreFromEvents } from '../score';
+import { GameEventType } from '../../common/game-events';
 
 describe('game rules', () => {
   it('normalizes answers before hashing', () => {
@@ -52,5 +55,26 @@ describe('game rules', () => {
   it('parses a socket join code', async () => {
     await expect(parseDto(WsJoinDto, { code: 'ab23cd' })).resolves.toMatchObject({ code: 'AB23CD' });
     await expect(parseDto(WsJoinDto, { code: 'contains-zero' })).rejects.toThrow();
+  });
+
+  it('limits travel to charted adjacency', () => {
+    expect(destinationsFrom('port-royal')).toEqual(['blackreef', 'serpent-cay']);
+    expect(canTravel('port-royal', 'blackreef')).toBe(true);
+    expect(canTravel('port-royal', 'the-vault')).toBe(false);
+    expect(canTravel(null, 'port-royal')).toBe(true);
+  });
+
+  it('scores voyage events per player', () => {
+    const scores = scoreFromEvents([
+      { type: GameEventType.PUZZLE_SOLVED, playerId: 'p1' },
+      { type: GameEventType.ISLAND_DISCOVERED, playerId: 'p1' },
+      { type: GameEventType.TRAP_TRIGGERED, playerId: 'p2' },
+    ]);
+    expect(scores).toEqual(
+      expect.arrayContaining([
+        { playerId: 'p1', points: 125 },
+        { playerId: 'p2', points: -30 },
+      ]),
+    );
   });
 });

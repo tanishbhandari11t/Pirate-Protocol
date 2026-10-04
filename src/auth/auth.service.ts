@@ -5,6 +5,8 @@ import { AuthError, signToken, verifyToken } from './token';
 
 @Injectable()
 export class AuthService {
+  private cachedSecret: string | undefined;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -34,6 +36,6 @@ export class AuthService {
   }
 
   private secret() {
-    return this.config.getOrThrow<string>('APP_SECRET');
+    return (this.cachedSecret ??= this.config.getOrThrow<string>('APP_SECRET'));
   }
 }
