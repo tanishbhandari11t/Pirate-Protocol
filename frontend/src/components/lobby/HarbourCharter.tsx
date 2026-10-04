@@ -1,0 +1,98 @@
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import { useId, useState, type ReactNode } from "react";
+import { cn } from "@/lib/cn";
+import { describeSettings } from "@/lib/crew/reducer";
+import { CAPABILITIES, type Capabilities } from "@/lib/socket/backend";
+import type { VoyageSettings } from "@/lib/socket/contract";
+import {
+  BinocularsIcon,
+  ChatIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  CrownIcon,
+  FogIcon,
+  LightbulbIcon,
+  PodiumIcon,
+  ScrollIcon,
+  SlidersIcon,
+  UserMinusIcon,
+  UsersIcon,
+} from "../icons";
+import { Panel } from "../ui/Panel";
+
+const ABSENT: Record<keyof Capabilities, { label: string; icon: ReactNode }> = {
+  avatars: { label: "Each sailor's likeness is drawn by the harbour, not chosen.", icon: <UsersIcon size={14} /> },
+  readyUp: { label: "No ready flags — the captain may weigh anchor at any time.", icon: <CheckIcon size={14} /> },
+  kick: { label: "The captain cannot cast sailors overboard.", icon: <UserMinusIcon size={14} /> },
+  articles: { label: "The articles are fixed and cannot be rewritten.", icon: <SlidersIcon size={14} /> },
+  chat: { label: "No crew chat — shout across the deck instead.", icon: <ChatIcon size={14} /> },
+  hints: { label: "No hints are for sale.", icon: <LightbulbIcon size={14} /> },
+  scores: { label: "No scores or ranks — only the first to open the Vault.", icon: <PodiumIcon size={14} /> },
+  spectate: { label: "Eliminated sailors follow the chart, not a single crewmate.", icon: <BinocularsIcon size={14} /> },
+  clock: { label: "No tide clock — the voyage runs until the Vault opens.", icon: <ClockIcon size={14} /> },
+  fog: { label: "Every island is visible from the start.", icon: <FogIcon size={14} /> },
+  outfits: { label: "Outfits and flags stay on your own deck; the crew sees your plain likeness.", icon: <CrownIcon size={14} /> },
+  marks: { label: "No shared ink — chart marks stay in your head.", icon: <ScrollIcon size={14} /> },
+  gambit: { label: "No dice on deck — the Captain's Gambit isn't played here.", icon: <CrownIcon size={14} /> },
+};
+
+const absent = (Object.keys(ABSENT) as (keyof Capabilities)[]).filter((key) => !CAPABILITIES[key]);
+
+/** Tells the crew which harbour customs apply when the server offers fewer features than the full protocol. */
+export function HarbourCharter({ settings }: { settings: VoyageSettings }) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+
+  if (absent.length === 0) return null;
+
+  return (
+    <Panel eyebrow="Customs of this harbour" title="Harbour Charter" padded={false}>
+      <div className="space-y-3 px-5 py-4 sm:px-6 short:py-3">
+        <p className="flex items-start gap-2.5 font-body leading-snug text-parchment/80">
+          <ScrollIcon size={15} className="mt-1 shrink-0 text-brass" />
+          <span>
+            The articles here are set by the harbour master:{" "}
+            <span className="text-parchment">{describeSettings(settings)}</span>.
+          </span>
+        </p>
+
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls={listId}
+          className="flex w-full items-center justify-between gap-3 rounded-sm border border-brass/20 bg-abyss/30 px-3 py-2 text-left font-ui text-[0.65rem] uppercase tracking-wider text-brass-light transition-colors hover:border-brass/40 hover:text-parchment"
+        >
+          <span>
+            {absent.length} {absent.length === 1 ? "custom" : "customs"} differ from the open seas
+          </span>
+          <ChevronDownIcon size={14} className={cn("shrink-0 transition-transform duration-300", open && "rotate-180")} />
+        </button>
+
+        <AnimatePresence initial={false}>
+          {open && (
+            <motion.ul
+              id={listId}
+              key="customs"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              className="space-y-2 overflow-hidden"
+            >
+              {absent.map((key) => (
+                <li key={key} className="flex items-start gap-2.5 font-body text-sm leading-snug text-parchment/70">
+                  <span className="mt-0.5 shrink-0 text-brass/70">{ABSENT[key].icon}</span>
+                  {ABSENT[key].label}
+                </li>
+              ))}
+            </motion.ul>
+          )}
+        </AnimatePresence>
+      </div>
+    </Panel>
+  );
+}

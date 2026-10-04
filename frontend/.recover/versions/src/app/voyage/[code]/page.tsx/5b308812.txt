@@ -1,0 +1,557 @@
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { AdaptiveSky } from "@/components/atmosphere/AdaptiveSky";
+import { useCrewReactions } from "@/components/avatar/useCrewReactions";
+import { CompassReveal } from "@/components/cinema/CompassReveal";
+import { SetSailCinematic, setSailKey, setSailSeen } from "@/components/cinema/SetSailCinematic";
+import { VictoryCinematic } from "@/components/cinema/VictoryCinematic";
+import { CrewChat } from "@/components/crew/CrewChat";
+import { ShakeLayer, shake } from "@/components/fx/ScreenShake";
+import { ChatIcon, KeyIcon, PodiumIcon, ScrollIcon, UsersIcon } from "@/components/icons";
+import { ShipsLog } from "@/components/lobby/ShipsLog";
+import { Button } from "@/components/ui/Button";
+import { LoadingScreen } from "@/components/ui/Loader";
+import { Modal } from "@/components/ui/Modal";
+import { useNotify } from "@/components/ui/Notifications";
+import { CrewRoster } from "@/components/voyage/CrewRoster";
+import { CrierTicker } from "@/components/voyage/CrierTicker";
+import { HelmCompass } from "@/components/voyage/HelmCompass";
+import { HintDrawer } from "@/components/voyage/HintDrawer";
+import { HonourToast } from "@/components/voyage/HonourToast";
+import { Inventory } from "@/components/voyage/Inventory";
+import { IslandPanel } from "@/components/voyage/IslandPanel";
+import { PuzzleOverlay, type PuzzleOutcome } from "@/components/voyage/PuzzleOverlay";
+import { Revelation, type Reveal } from "@/components/voyage/Revelation";
+import { Scoreboard } from "@/components/voyage/Scoreboard";
+import { SpectatorBar } from "@/components/voyage/SpectatorBar";
+import { TrapOverlay } from "@/components/voyage/TrapOverlay";
+import { TreasureFinale } from "@/components/voyage/TreasureFinale";
+import { VoyageHud } from "@/components/voyage/VoyageHud";
+import { VoyageMap, type KrakenSighting, type MapCallout } from "@/components/voyage/VoyageMap";
+import { VoyageResults } from "@/components/voyage/VoyageResults";
+import { VoyageTutorial, tutorialSeen } from "@/components/voyage/VoyageTutorial";
+import { cn } from "@/lib/cn";
+import { useCrew, useVoyageClock } from "@/lib/crew/CrewProvider";
+import { selectScore } from "@/lib/crew/reducer";
+import { VAULT_KEY, findPlayer, isVaultReady, islandByKey, voyageStats } from "@/lib/game/selectors";
+import { dangerFor, trapZones, type Danger } from "@/lib/game/danger";
+import { useHoldLayout } from "@/lib/game/gear";
+import { nextDestination } from "@/lib/game/heading";
+import { skyAt, skyFor, UNTIMED_START_HOUR } from "@/lib/game/sky";
+import { SQUALL_MS, weatherFor } from "@/lib/game/weather";
+import { itemInfo } from "@/lib/game/world";
+import { CAPABILITIES } from "@/lib/socket/backend";
+import { onServerEvent } from "@/lib/socket/client";
+import { isGameEvent, START_ISLAND_KEY } from "@/lib/socket/contract";
+import { describeError } from "@/lib/socket/errors";
+import { playSfx, toggleMuted } from "@/lib/sound";
+import { useSoundscape } from "@/lib/soundscape";
+import { seatStore } from "@/lib/storage";
+import { useHotkeys } from "@/lib/useHotkeys";
+import { sanitizeRoomCode } from "@/lib/validation";
+
+type Tab = "hold" | "crew" | "scores" | "chat" | "log";
+
+const TABS: { id: Tab; label: string; key: string; icon: ReactNode }[] = [
+  { id: "hold" as const, label: "Hold", key: "h", icon: <KeyIcon size={14} /> },
+  { id: "crew" as const, label: "Crew", key: "r", icon: <UsersIcon size={14} /> },
+  { id: "scores" as const, label: "Standings", key: "s", icon: <PodiumIcon size={14} /> },
+  { id: "chat" as const, label: "Chat", key: "c", icon: <ChatIcon size={14} /> },
+  { id: "log" as const, label: "Log", key: "l", icon: <ScrollIcon size={14} /> },
+].filter((t) => (t.id !== "scores" || CAPABILITIES.scores) && (t.id !== "chat" || CAPABILITIES.chat));
+
+/** How long the fog visibly rolls back after a new island is charted. */
+const FOG_SURGE_MS = 1_800;
+const KRAKEN_MS = 4_500;
+const CALLOUT_MS = 5_000;
+/** The opening cinematic only plays for sailors arriving at the very start of a voyage. */
+const OPENING_WINDOW_MS = 30_000;
+/** The sky drifts slowly, so it only needs recomputing every few seconds of voyage time. */
+const SKY_STEP_MS = 5_000;
+const SAFE_WATERS: Danger = { level: 0, reasons: [], tint: "#1f5566" };
+
+export default function VoyagePage() {
+  const params = useParams<{ code: string }>();
+  const code = sanitizeRoomCode(params.code ?? "");
+  const router = useRouter();
+  const { notify } = useNotify();
+  const { state, voyage, sailor, rejoinCrew, leaveCrew, move, submitAnswer, trade, pending } = useCrew();
+  const seat = useSyncExternalStore(seatStore.subscribe, seatStore.getSnapshot, seatStore.getServerSnapshot);
+
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [puzzleOpen, setPuzzleOpen] = useState(false);
+  const [sailingTo, setSailingTo] = useState<string | null>(null);
+  const [fogSurge, setFogSurge] = useState(false);
+  const [reveals, setReveals] = useState<Reveal[]>([]);
+  const [trap, setTrap] = useState<{ strikes: number; eliminated: boolean; islandName: string } | null>(null);
+  const [tab, setTab] = useState<Tab>("hold");
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [finaleDone, setFinaleDone] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(() => !tutorialSeen());
+  const [squallId, setSquallId] = useState<string | null>(null);
+  const [kraken, setKraken] = useState<KrakenSighting | null>(null);
+  const [callouts, setCallouts] = useState<Record<string, MapCallout>>({});
+  const [victoryDone, setVictoryDone] = useState(false);
+  const [headingReveal, setHeadingReveal] = useState<string | null>(null);
+  const [openingKey, setOpeningKey] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const opening = state.room?.code === code ? state.room.voyage : null;
+    if (!opening || opening.status !== "sailing" || Date.now() - opening.startedAt > OPENING_WINDOW_MS) return null;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return null;
+    const key = setSailKey(code, opening.startedAt);
+    return setSailSeen(key) ? null : key;
+  });
+  const rejoinAttempted = useRef(false);
+  const clock = useVoyageClock();
+  const reactions = useCrewReactions(code);
+
+  const room = state.room?.code === code ? state.room : null;
+  const hasSeat = seat?.roomCode === code;
+  const meId = state.playerId;
+
+  /* ---------------- Seat recovery & routing ---------------- */
+
+  useEffect(() => {
+    if (room || leaving) return;
+    // Hydration renders without storage, so ask the store itself before giving up on the seat.
+    if (!hasSeat && seatStore.get()?.roomCode !== code) {
+      router.replace(`/crew/join?code=${code}`);
+      return;
+    }
+    if (rejoinAttempted.current) return;
+    rejoinAttempted.current = true;
+    rejoinCrew(code).then((res) => {
+      if (!res.ok) {
+        notify({ tone: "danger", title: "Could not reclaim your berth", message: describeError(res.error.code) });
+        router.replace("/");
+      }
+    });
+  }, [room, hasSeat, code, leaving, rejoinCrew, router, notify]);
+
+  useEffect(() => {
+    if (room && room.phase === "lobby") router.replace(`/lobby/${room.code}`);
+  }, [room, router]);
+
+  /* ---------------- Reveals pushed by the server ---------------- */
+
+  const voyageRef = useRef(voyage);
+  useEffect(() => {
+    voyageRef.current = voyage;
+  });
+
+  useEffect(
+    () =>
+      onServerEvent("game:event", (event) => {
+        if (!meId) return;
+        if (isGameEvent(event, "VAULT_AWAKENED") && event.playerId === meId) {
+          setReveals((list) => [...list, { id: event.id, kind: "vault" }]);
+          setHeadingReveal(event.id);
+        }
+        if (isGameEvent(event, "PUZZLE_SOLVED") && event.playerId === meId) setHeadingReveal(event.id);
+        if (isGameEvent(event, "TRADED") && event.payload.toPlayerId === meId) {
+          const current = voyageRef.current;
+          const from = (current && findPlayer(current, event.payload.fromPlayerId)?.username) ?? "A crewmate";
+          setReveals((list) => [...list, { id: event.id, kind: "trade", from, itemKey: event.payload.itemKey }]);
+        }
+        if (isGameEvent(event, "TRAP_TRIGGERED")) {
+          setKraken({ id: event.id, islandKey: event.payload.islandKey });
+          setSquallId(event.id);
+          if (event.playerId !== meId) {
+            playSfx("splash");
+            shake(0.6);
+          }
+        }
+        if (isGameEvent(event, "TIME_WARNING")) playSfx("bell");
+      }),
+    [meId],
+  );
+
+  useEffect(
+    () =>
+      onServerEvent("chat:message", (message) => {
+        const speaker = message.playerId;
+        if (!speaker || message.kind === "system") return;
+        setCallouts((all) => ({ ...all, [speaker]: { id: message.id, text: message.text, call: message.kind === "call" } }));
+        if (speaker !== meId) playSfx("chat");
+        window.setTimeout(() => {
+          setCallouts((all) => {
+            if (all[speaker]?.id !== message.id) return all;
+            const rest = { ...all };
+            delete rest[speaker];
+            return rest;
+          });
+        }, CALLOUT_MS);
+      }),
+    [meId],
+  );
+
+  useEffect(() => {
+    if (!fogSurge) return;
+    const timer = window.setTimeout(() => setFogSurge(false), FOG_SURGE_MS);
+    return () => window.clearTimeout(timer);
+  }, [fogSurge]);
+
+  useEffect(() => {
+    if (!kraken) return;
+    const timer = window.setTimeout(() => setKraken(null), KRAKEN_MS);
+    return () => window.clearTimeout(timer);
+  }, [kraken]);
+
+  useEffect(() => {
+    if (!squallId) return;
+    const timer = window.setTimeout(() => setSquallId(null), SQUALL_MS);
+    return () => window.clearTimeout(timer);
+  }, [squallId]);
+
+  /* ---------------- Derived view ---------------- */
+
+  const charted = useMemo(() => new Set(voyage?.discovered ?? []), [voyage?.discovered]);
+  const followed = voyage && sailor?.followingId ? findPlayer(voyage, sailor.followingId) : null;
+  const activeKey = selectedKey ?? followed?.currentIslandKey ?? null;
+  const island = voyage ? islandByKey(voyage, activeKey) : null;
+  const puzzle = island?.puzzles[0] ?? null;
+  const vaultOpen = voyage ? isVaultReady(voyage) : false;
+  const finished = voyage?.status === "FINISHED";
+  const winner = voyage ? findPlayer(voyage, voyage.winnerPlayerId) : null;
+  const score = CAPABILITIES.scores ? (selectScore(state, meId)?.score ?? 0) : null;
+  const stats = useMemo(() => (voyage ? voyageStats(voyage, voyage.discovered.length) : null), [voyage]);
+  const weather = voyage
+    ? weatherFor({ room: voyage, remainingMs: clock.remainingMs, squall: squallId !== null, vaultOpen }, clock.elapsedMs ?? 0)
+    : null;
+  const stormy = weather?.storm ?? false;
+  const startedAt = room?.voyage?.startedAt ?? null;
+  const endsAt = voyage?.endsAt ?? null;
+  const skyElapsed = Math.floor((clock.elapsedMs ?? 0) / SKY_STEP_MS) * SKY_STEP_MS;
+  const sky = useMemo(
+    () => (startedAt !== null ? skyFor({ startedAt, endsAt, now: startedAt + skyElapsed }) : skyAt(UNTIMED_START_HOUR)),
+    [startedAt, endsAt, skyElapsed],
+  );
+  const danger = useMemo(
+    () =>
+      voyage && meId
+        ? dangerFor({ room: voyage, meId, charted, sea: weather?.state ?? "calm", kraken: kraken !== null })
+        : SAFE_WATERS,
+    [voyage, meId, charted, weather?.state, kraken],
+  );
+  const zones = useMemo(() => (voyage && meId ? trapZones(voyage, charted, meId) : []), [voyage, charted, meId]);
+  const held = useMemo(() => new Set((voyage?.you ?? []).map((i) => i.itemKey)), [voyage?.you]);
+  const { gear } = useHoldLayout(code, held);
+  const destination = useMemo(() => (voyage && meId ? nextDestination(voyage, meId, charted) : null), [voyage, meId, charted]);
+  const course =
+    gear.helm === "widow-chart" && destination && sailor?.currentIslandKey
+      ? { from: sailor.currentIslandKey, to: destination.island.key }
+      : null;
+
+  /* ---------------- Soundscape ---------------- */
+
+  const atSea = !!voyage && !finished;
+
+  useSoundscape(atSea, {
+    intensity: weather?.intensity ?? 0.1,
+    sailing: sailingTo !== null,
+    atPort: sailor?.currentIslandKey === START_ISLAND_KEY,
+    darkness: Math.round(sky.darkness * 20) / 20,
+    danger: Math.round(danger.level * 20) / 20,
+  });
+
+  useEffect(() => {
+    if (stormy) playSfx("thunder");
+  }, [stormy]);
+
+  /* ---------------- Orders ---------------- */
+
+  const sail = useCallback(async () => {
+    if (!activeKey) return;
+    setSailingTo(activeKey);
+    const res = await move(activeKey);
+    setSailingTo(null);
+    if (!res.ok) {
+      notify({ tone: "warning", title: "The ship won't turn", message: describeError(res.error.code, res.error.message) });
+      return;
+    }
+    playSfx("sail");
+    const landed = islandByKey(voyageRef.current!, res.data.islandKey);
+    if (res.data.discovered) setFogSurge(true);
+    if (landed) {
+      setReveals((list) => [
+        ...list,
+        { id: `arrival-${landed.key}-${Date.now()}`, kind: "arrival", island: landed, discovered: res.data.discovered },
+      ]);
+    }
+  }, [activeKey, move, notify]);
+
+  const answer = useCallback(
+    async (text: string): Promise<PuzzleOutcome> => {
+      if (!puzzle || !island) return { kind: "error", message: "The riddle has vanished." };
+      const res = await submitAnswer(puzzle.key, text);
+      if (!res.ok) return { kind: "error", message: describeError(res.error.code, res.error.message) };
+
+      const verdict = res.data;
+      if (verdict.outcome === "solved") {
+        playSfx("solve");
+        if (verdict.reward && !verdict.treasureFound) {
+          const info = itemInfo(verdict.reward);
+          setReveals((list) => [
+            ...list,
+            { id: `item-${verdict.reward}-${Date.now()}`, kind: "item", itemKey: verdict.reward!, name: info.name, description: info.lore },
+          ]);
+        }
+        return { kind: "solved" };
+      }
+      if (verdict.outcome === "trap") {
+        setPuzzleOpen(false);
+        setTrap({ strikes: verdict.strikes, eliminated: verdict.eliminated, islandName: island.name });
+        return { kind: "trap" };
+      }
+      playSfx("fail");
+      return { kind: "failed" };
+    },
+    [puzzle, island, submitAnswer],
+  );
+
+  const passItem = useCallback(
+    async (toPlayerId: string, itemKey: string) => {
+      const res = await trade(toPlayerId, itemKey);
+      if (!res.ok) {
+        notify({ tone: "warning", title: "The trade fell through", message: describeError(res.error.code, res.error.message) });
+        return false;
+      }
+      notify({ tone: "success", title: "Passed along", message: `${itemInfo(itemKey).name} changed hands.` });
+      return true;
+    },
+    [trade, notify],
+  );
+
+  const leave = async (to: string) => {
+    setLeaving(true);
+    await leaveCrew();
+    router.push(to);
+  };
+
+  useHotkeys(
+    {
+      m: toggleMuted,
+      escape: () => (puzzleOpen ? setPuzzleOpen(false) : setSelectedKey(null)),
+      ...Object.fromEntries(TABS.map((t) => [t.key, () => setTab(t.id)])),
+    },
+    !finished && !showTutorial,
+  );
+
+  /* ---------------- Render ---------------- */
+
+  if (!room || !voyage || !sailor || !meId || !stats) {
+    return <LoadingScreen show message="Rowing back aboard" detail="Reclaiming your place on the map…" />;
+  }
+
+  if (finished && (finaleDone || voyage.finishReason !== "treasure")) {
+    if (!victoryDone) return <VictoryCinematic room={voyage} meId={meId} onDone={() => setVictoryDone(true)} />;
+    return (
+      <VoyageResults
+        room={voyage}
+        meId={meId}
+        stats={stats}
+        sailing={leaving}
+        onSailAgain={() => leave("/crew/create")}
+        onHome={() => leave("/")}
+      />
+    );
+  }
+
+  return (
+    <main className="flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden">
+      <AdaptiveSky sky={sky} weather={weather} danger={danger} />
+      <VoyageHud room={voyage} me={sailor} score={score} weather={weather ?? undefined} sky={sky} onLeave={() => setConfirmLeave(true)} />
+
+      <ShakeLayer className="flex flex-1 flex-col lg:min-h-0">
+      <div className="mx-auto grid w-full max-w-[110rem] flex-1 gap-4 p-3 sm:p-4 lg:min-h-0 lg:grid-cols-[1fr_24rem] xl:grid-cols-[1fr_26rem]">
+        <section className="flex flex-col gap-3 lg:min-h-0 lg:overflow-y-auto">
+          {(sailor.isEliminated || followed) && <SpectatorBar room={voyage} />}
+          <div data-tour="map" className="relative">
+            <VoyageMap
+              room={voyage}
+              meId={meId}
+              charted={charted}
+              vaultOpen={vaultOpen}
+              selectedKey={activeKey}
+              sailingTo={sailingTo}
+              fogSurge={fogSurge}
+              onSelect={(key) => setSelectedKey((current) => (current === key ? null : key))}
+              weather={weather ?? undefined}
+              callouts={callouts}
+              kraken={kraken}
+              sky={sky}
+              dangerZones={zones}
+              course={course}
+              soundingsFrom={gear.glass === "spyglass" ? sailor.currentIslandKey : null}
+              interactive={!finished}
+            />
+            {gear.helm === "compass" && !finished && (
+              <HelmCompass destination={destination} className="absolute left-3 top-3 z-10" />
+            )}
+            <CrierTicker entries={state.log} />
+          </div>
+          <AnimatePresence>
+            {island && (
+              <IslandPanel
+                key={island.key}
+                room={voyage}
+                me={sailor}
+                island={island}
+                charted={charted.has(island.key)}
+                vaultOpen={vaultOpen}
+                busy={pending.has("map:move") || pending.has("puzzle:submit")}
+                onSail={sail}
+                onInvestigate={() => setPuzzleOpen(true)}
+                onClose={() => setSelectedKey(null)}
+              />
+            )}
+          </AnimatePresence>
+          {!sailor.isEliminated && !followed && <SpectatorBar room={voyage} />}
+        </section>
+
+        <aside data-tour="tabs" className="wood-panel flex min-h-[28rem] flex-col rounded-md lg:min-h-0">
+          <nav role="tablist" aria-label="Voyage panels" className="flex border-b border-brass/20">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                id={`voyage-tab-${t.id}`}
+                aria-selected={tab === t.id}
+                aria-controls="voyage-tabpanel"
+                onClick={() => setTab(t.id)}
+                title={`${t.label} (${t.key.toUpperCase()})`}
+                className={cn(
+                  "relative flex flex-1 flex-col items-center gap-1 px-1 py-2.5 font-ui text-[0.55rem] uppercase tracking-[0.18em] transition",
+                  tab === t.id ? "bg-brass/15 text-gold" : "text-brass/60 hover:text-brass-light",
+                )}
+              >
+                {t.icon}
+                {t.label}
+                {t.id === "chat" && state.unreadChat > 0 && tab !== "chat" && (
+                  <span className="absolute right-2 top-1.5 min-w-4 rounded-full bg-blood-light px-1 text-center font-ui text-[0.55rem] font-bold leading-4 text-parchment-light">
+                    {state.unreadChat > 9 ? "9+" : state.unreadChat}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
+
+          <div
+            id="voyage-tabpanel"
+            role="tabpanel"
+            aria-labelledby={`voyage-tab-${tab}`}
+            className="min-h-0 flex-1 overflow-y-auto p-3"
+          >
+            {tab === "hold" && <Inventory room={voyage} me={sailor} onTrade={passItem} />}
+            {tab === "crew" && <CrewRoster room={voyage} meId={meId} reactions={reactions} />}
+            {tab === "scores" && <Scoreboard room={voyage} meId={meId} />}
+            {tab === "chat" && <CrewChat bare className="-m-3 h-full" />}
+            {tab === "log" && <ShipsLog entries={state.log} defaultFilter="voyage" />}
+          </div>
+        </aside>
+      </div>
+      </ShakeLayer>
+
+      <HonourToast room={voyage} meId={meId} />
+
+      <AnimatePresence>
+        {puzzleOpen && island && puzzle && (
+          <PuzzleOverlay
+            key={puzzle.key}
+            island={island}
+            puzzle={puzzle}
+            isVault={island.key === VAULT_KEY}
+            onSubmit={answer}
+            onClose={() => setPuzzleOpen(false)}
+            footer={CAPABILITIES.hints ? <HintDrawer puzzle={puzzle} /> : undefined}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {reveals[0] && !trap && (
+          <Revelation key={reveals[0].id} reveal={reveals[0]} onDone={() => setReveals((list) => list.slice(1))} />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {trap && (
+          <TrapOverlay
+            key="trap"
+            strikes={trap.strikes}
+            eliminated={trap.eliminated}
+            islandName={trap.islandName}
+            maxStrikes={voyage.settings.maxStrikes}
+            onDone={() => setTrap(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {finished && voyage.finishReason === "treasure" && !finaleDone && (
+        <TreasureFinale
+          room={voyage}
+          winnerName={winner ? (winner.id === meId ? "You" : winner.username) : null}
+          onDone={() => setFinaleDone(true)}
+        />
+      )}
+
+      <AnimatePresence>
+        {headingReveal && !openingKey && !reveals[0] && !trap && !puzzleOpen && !finished && destination && (
+          <motion.div
+            key={headingReveal}
+            className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-abyss/40"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <CompassReveal destination={destination} spins={2} holdMs={3_600} onDone={() => setHeadingReveal(null)} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openingKey && !finished && (
+          <SetSailCinematic
+            key="set-sail"
+            seenKey={openingKey}
+            crewName={voyage.name}
+            islands={voyage.islands}
+            charted={charted}
+            destination={destination}
+            onDone={() => setOpeningKey(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {showTutorial && !finished && !openingKey && <VoyageTutorial onDone={() => setShowTutorial(false)} />}
+
+      <Modal
+        open={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        eyebrow="A grave decision"
+        title="Abandon Ship?"
+        dismissible={!leaving}
+        footer={
+          <>
+            <Button variant="parchment" onClick={() => setConfirmLeave(false)} disabled={leaving} data-autofocus>
+              Stay aboard
+            </Button>
+            <Button variant="danger" onClick={() => leave("/")} loading={leaving}>
+              Abandon ship
+            </Button>
+          </>
+        }
+      >
+        <p className="text-center">
+          Your berth on this voyage will be given away. Your relics stay with the ship, and you cannot rejoin once the
+          crew has set sail.
+        </p>
+      </Modal>
+    </main>
+  );
+}

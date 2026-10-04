@@ -1,0 +1,221 @@
+"use client";
+
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { memo, useEffect, useMemo, useState } from "react";
+import type { Danger } from "@/lib/game/danger";
+import { mixColor, type Sky } from "@/lib/game/sky";
+import type { Weather } from "@/lib/game/weather";
+import { seeded } from "@/lib/random";
+import { playSfx } from "@/lib/sound";
+
+interface AdaptiveSkyProps {
+  sky: Sky;
+  weather: Weather | null;
+  danger: Danger;
+  /** Let far-off lightning roll its thunder through the speakers. */
+  thunder?: boolean;
+}
+
+/** Where the horizon sits, as a percentage from the top of the screen. */
+const HORIZON = 62;
+
+/**
+ * The world behind the voyage screen. The sky follows the voyage clock, clouds and distant
+ * lightning follow the weather, and the sea darkens as danger gathers around this sailor.
+ */
+export function AdaptiveSky({ sky, weather, danger, thunder = true }: AdaptiveSkyProps) {
+  const reduced = useReducedMotion();
+  const intensity = weather?.intensity ?? 0;
+  const overcast = Math.min(1, intensity * 1.1);
+  const top = mixColor(sky.top, "#1b232b", overcast * 0.6);
+  const middle = mixColor(sky.middle, "#3a4650", overcast * 0.55);
+  const horizon = mixColor(sky.horizon, "#59646b", overcast * 0.5);
+  const sea = mixColor(sky.sea, danger.tint, 0.35 + danger.level * 0.55);
+  const deep = mixColor(sea, "#020509", 0.65);
+
+  return (
+    <div className="pointer-events-none fixed inset-0 -z-[5] overflow-hidden" aria-hidden>
+      <div
+        className="absolute inset-0 transition-[background] duration-[4000ms] ease-linear"
+        style={{ background: `linear-gradient(180deg, ${top} 0%, ${middle} ${HORIZON * 0.7}%, ${horizon} ${HORIZON}%, ${sea} ${HORIZON}%, ${deep} 100%)` }}
+      />
+
+      <Stars visible={sky.stars * (1 - overcast)} />
+      <Sun sky={sky} dimmed={overcast} />
+      <Moon sky={sky} dimmed={overcast} />
+      <Clouds count={Math.round(3 + intensity * 7)} shade={mixColor("#f3efe6", "#2a3138", Math.max(sky.darkness, overcast * 0.8))} still={!!reduced} speed={1 + intensity * 2.5} />
+      {weather?.storm && <DistantLightning fierce={weather.state === "tempest"} thunder={thunder} still={!!reduced} />}
+
+      <SeaSurface tint={sea} danger={danger.level} still={!!reduced} />
+      <motion.div
+        className="absolute inset-x-0 bottom-0"
+        style={{ top: `${HORIZON}%`, background: "radial-gradient(ellipse at 50% 0%, rgba(140,20,30,0.55), transparent 70%)" }}
+        initial={false}
+        animate={{ opacity: danger.level * 0.8 }}
+        transition={{ duration: 2.5 }}
+      />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,rgba(0,0,0,0.55)_100%)]" />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+const STARS = (() => {
+  const rand = seeded(311);
+  return Array.from({ length: 70 }, () => ({ x: rand() * 100, y: rand() * HORIZON * 0.9, r: 0.6 + rand() * 1.4, twinkle: rand() * 4 }));
+})();
+
+const Stars = memo(function Stars({ visible }: { visible: number }) {
+  return (
+    <svg className="absolute inset-0 h-full w-full transition-opacity duration-[4000ms]" style={{ opacity: visible }} preserveAspectRatio="none">
+      {STARS.map((s, i) => (
+        <circle key={i} cx={`${s.x}%`} cy={`${s.y}%`} r={s.r} fill="#fff8e1">
+          <animate attributeName="opacity" values="0.3;1;0.3" dur={`${3 + s.twinkle}s`} repeatCount="indefinite" />
+        </circle>
+      ))}
+    </svg>
+  );
+});
+
+/** Position on the day arc for a body that rises at 06:00 and sets at 18:00 of its own clock. */
+function arc(hour: number) {
+  const t = (hour - 6) / 12;
+  const altitude = Math.sin(t * Math.PI);
+  return { left: `${8 + t * 84}%`, top: `${HORIZON - altitude * (HORIZON - 10)}%`, up: t > -0.05 && t < 1.05 };
+}
+
+function Sun({ sky, dimmed }: { sky: Sky; dimmed: number }) {
+  const pos = arc(sky.hour);
+  if (!pos.up) return null;
+  const low = 1 - Math.max(0, sky.sunAltitude);
+  return (
+    <div
+      className="absolute h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full transition-[left,top,opacity] duration-[4000ms] ease-linear"
+      style={{
+        left: pos.left,
+        top: pos.top,
+        opacity: 1 - dimmed * 0.75,
+        background: `radial-gradient(circle, ${mixColor("#fff6d6", "#ff9a4d", low)} 0%, ${mixColor("#ffe08a", "#e2582c", low)} 32%, transparent 70%)`,
+        boxShadow: `0 0 120px 40px ${mixColor("#fff1b0", "#e86a3a", low)}33`,
+      }}
+    />
+  );
+}
+
+function Moon({ sky, dimmed }: { sky: Sky; dimmed: number }) {
+  const pos = arc((sky.hour + 12) % 24);
+  if (!pos.up) return null;
+  return (
+    <div
+      className="absolute h-14 w-14 -translate-x-1/2 -translate-y-1/2 transition-[left,top,opacity] duration-[4000ms] ease-linear"
+      style={{ left: pos.left, top: pos.top, opacity: (0.3 + sky.darkness * 0.7) * (1 - dimmed * 0.7) }}
+    >
+      <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_40%_40%,#fbf6e4,#cfc7ad_70%)] shadow-[0_0_50px_14px_rgba(230,225,200,0.25)]" />
+      <div className="absolute left-[22%] top-[30%] h-2.5 w-2.5 rounded-full bg-[#b9b096]/60" />
+      <div className="absolute left-[55%] top-[55%] h-1.5 w-1.5 rounded-full bg-[#b9b096]/60" />
+    </div>
+  );
+}
+
+const CLOUD_BANK = (() => {
+  const rand = seeded(97);
+  return Array.from({ length: 10 }, () => ({
+    y: 6 + rand() * (HORIZON - 22),
+    scale: 0.6 + rand() * 0.9,
+    start: rand() * 100,
+    duration: 90 + rand() * 80,
+  }));
+})();
+
+const Clouds = memo(function Clouds({ count, shade, still, speed }: { count: number; shade: string; still: boolean; speed: number }) {
+  return (
+    <>
+      {CLOUD_BANK.slice(0, count).map((cloud, i) => (
+        <motion.svg
+          key={i}
+          viewBox="0 0 200 70"
+          className="absolute w-64 transition-[opacity] duration-[3000ms]"
+          style={{ top: `${cloud.y}%`, left: `${cloud.start}%`, scale: cloud.scale, opacity: 0.55 }}
+          animate={still ? undefined : { x: ["-30vw", "110vw"] }}
+          transition={still ? undefined : { duration: cloud.duration / speed, repeat: Infinity, ease: "linear", delay: -cloud.start / speed }}
+        >
+          <g fill={shade} style={{ transition: "fill 4s linear" }}>
+            <ellipse cx="60" cy="45" rx="50" ry="20" />
+            <ellipse cx="100" cy="32" rx="44" ry="26" />
+            <ellipse cx="140" cy="46" rx="48" ry="18" />
+            <ellipse cx="95" cy="52" rx="80" ry="14" />
+          </g>
+        </motion.svg>
+      ))}
+    </>
+  );
+});
+
+/** Far-off strikes on the horizon. The flash comes first; the rumble follows, as sound is slower than light. */
+function DistantLightning({ fierce, thunder, still }: { fierce: boolean; thunder: boolean; still: boolean }) {
+  const [strike, setStrike] = useState<{ id: number; x: number; bolt: number } | null>(null);
+
+  useEffect(() => {
+    if (still) return;
+    let alive = true;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const later = (ms: number, fn: () => void) => timers.push(setTimeout(() => alive && fn(), ms));
+    const loop = () => {
+      const gap = (fierce ? 4_000 : 8_000) + Math.random() * (fierce ? 5_000 : 9_000);
+      later(gap, () => {
+        const id = Date.now();
+        setStrike({ id, x: 10 + Math.random() * 80, bolt: Math.floor(Math.random() * BOLTS.length) });
+        later(700, () => setStrike((s) => (s?.id === id ? null : s)));
+        if (thunder) later(1_200 + Math.random() * 2_400, () => playSfx("rumble"));
+        loop();
+      });
+    };
+    loop();
+    return () => {
+      alive = false;
+      timers.forEach(clearTimeout);
+    };
+  }, [fierce, thunder, still]);
+
+  return (
+    <AnimatePresence>
+      {strike && (
+        <motion.div key={strike.id} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: [0, 1, 0.2, 0.8, 0] }} exit={{ opacity: 0 }} transition={{ duration: 0.7, times: [0, 0.1, 0.3, 0.4, 1] }}>
+          <div
+            className="absolute inset-x-0 top-0"
+            style={{ height: `${HORIZON}%`, background: `radial-gradient(ellipse at ${strike.x}% ${HORIZON}%, rgba(220,230,255,0.45), transparent 60%)` }}
+          />
+          <svg className="absolute h-[34%] w-24 -translate-x-1/2" style={{ left: `${strike.x}%`, top: `${HORIZON - 34}%` }} viewBox="0 0 40 120" preserveAspectRatio="none">
+            <path d={BOLTS[strike.bolt]} fill="none" stroke="#eef3ff" strokeWidth="1.6" strokeLinejoin="bevel" opacity="0.85" />
+            <path d={BOLTS[strike.bolt]} fill="none" stroke="#eef3ff" strokeWidth="5" strokeOpacity="0.2" strokeLinejoin="bevel" />
+          </svg>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+const BOLTS = [
+  "M22 0 L16 34 L25 38 L12 78 L20 82 L10 120",
+  "M18 0 L24 30 L14 36 L26 70 L17 74 L28 120",
+  "M20 0 L12 40 L22 44 L16 84 L24 86 L19 120 M16 84 L6 104",
+];
+
+const SeaSurface = memo(function SeaSurface({ tint, danger, still }: { tint: string; danger: number; still: boolean }) {
+  const lines = useMemo(() => {
+    const rand = seeded(19);
+    return Array.from({ length: 16 }, (_, i) => ({ y: HORIZON + 2 + (i / 16) ** 1.4 * (100 - HORIZON - 4), x: rand() * 100, w: 6 + rand() * 14 }));
+  }, []);
+  const glint = mixColor("#cfe6ea", "#e0a0a0", danger);
+  return (
+    <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+      <line x1="0" x2="100%" y1={`${HORIZON}%`} y2={`${HORIZON}%`} stroke={mixColor(tint, "#ffffff", 0.25)} strokeOpacity="0.45" strokeWidth="1" />
+      {lines.map((l, i) => (
+        <line key={i} x1={`${l.x}%`} x2={`${l.x + l.w}%`} y1={`${l.y}%`} y2={`${l.y}%`} stroke={glint} strokeOpacity={0.08 + (i / lines.length) * 0.12} strokeWidth={1 + i / 8}>
+          {!still && <animate attributeName="x1" values={`${l.x}%;${l.x + 2}%;${l.x}%`} dur={`${6 + (i % 5)}s`} repeatCount="indefinite" />}
+        </line>
+      ))}
+    </svg>
+  );
+});

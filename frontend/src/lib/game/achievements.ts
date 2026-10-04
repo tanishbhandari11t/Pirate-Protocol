@@ -1,0 +1,91 @@
+import { REQUIRED_RELICS, type PlayerId, type RoomState } from "../socket/contract";
+import { relicsOf, solvedKeys, trailsFrom } from "./selectors";
+import type { ItemGlyph } from "./world";
+
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  glyph: ItemGlyph;
+}
+
+interface Rule extends Achievement {
+  earned: (room: RoomState, playerId: PlayerId) => boolean;
+}
+
+const firstSolver = (room: RoomState) => room.log.find((e) => e.type === "PUZZLE_SOLVED")?.playerId ?? null;
+const player = (room: RoomState, id: PlayerId) => room.players.find((p) => p.id === id);
+
+/** Honours are earned only from what the server recorded: progress, strikes, the log and the winner. */
+const RULES: Rule[] = [
+  {
+    id: "vault-breaker",
+    title: "Vault Breaker",
+    description: "Turned the final key of the Lost Vault.",
+    glyph: "chest",
+    earned: (room, id) => room.winnerPlayerId === id,
+  },
+  {
+    id: "relic-hunter",
+    title: "Relic Hunter",
+    description: `Recovered all ${REQUIRED_RELICS.length} relics.`,
+    glyph: "compass",
+    earned: (room, id) => relicsOf(room, id).length === REQUIRED_RELICS.length,
+  },
+  {
+    id: "first-riddle",
+    title: "First to the Riddle",
+    description: "Cracked the crew's first puzzle.",
+    glyph: "key",
+    earned: (room, id) => firstSolver(room) === id,
+  },
+  {
+    id: "unbroken",
+    title: "Unbroken",
+    description: "Solved puzzles without a single strike.",
+    glyph: "seal",
+    earned: (room, id) => player(room, id)?.strikes === 0 && solvedKeys(room, id).size > 0,
+  },
+  {
+    id: "scarred",
+    title: "Scarred but Standing",
+    description: "Sprang a trap and sailed on.",
+    glyph: "coin",
+    earned: (room, id) => {
+      const p = player(room, id);
+      return !!p && p.strikes > 0 && !p.isEliminated;
+    },
+  },
+  {
+    id: "generous",
+    title: "Generous Soul",
+    description: "Passed an item to a crewmate.",
+    glyph: "rumor",
+    earned: (room, id) => room.log.some((e) => e.type === "TRADED" && e.payload.fromPlayerId === id),
+  },
+  {
+    id: "cartographer",
+    title: "Cartographer",
+    description: "Dropped anchor at six islands or more.",
+    glyph: "chart",
+    earned: (room, id) => new Set(trailsFrom(room).get(id) ?? []).size >= 6,
+  },
+  {
+    id: "ghost",
+    title: "Ghost Ship",
+    description: "Claimed by the sea, yet stayed with the crew.",
+    glyph: "spyglass",
+    earned: (room, id) => !!player(room, id)?.isEliminated,
+  },
+];
+
+/** Every honour that can be earned, in the order the results screen lists them. */
+export const ACHIEVEMENTS: Achievement[] = RULES.map(({ id, title, description, glyph }) => ({ id, title, description, glyph }));
+
+export function achievementById(id: string): Achievement | null {
+  return ACHIEVEMENTS.find((a) => a.id === id) ?? null;
+}
+
+export function achievementsFor(room: RoomState, playerId: PlayerId): Achievement[] {
+  return RULES.filter((rule) => rule.earned(room, playerId)).map(({ id, title, description, glyph }) => ({ id, title, description, glyph }));
+}

@@ -1,0 +1,126 @@
+"use client";
+
+import { cn } from "@/lib/cn";
+import { SAILOR_COLORS } from "@/lib/game/chart";
+import { islandByKey, relicsOf, solvedKeys } from "@/lib/game/selectors";
+import { itemInfo } from "@/lib/game/world";
+import type { Reaction } from "@/lib/game/reactions";
+import { REQUIRED_RELICS, type PlayerId, type RoomState } from "@/lib/socket/contract";
+import { LivingAvatar } from "../avatar/LivingAvatar";
+import { BinocularsIcon, CrownIcon, LightbulbIcon, SkullIcon } from "../icons";
+import { Badge } from "../ui/Ornaments";
+import { ItemGlyph } from "./ItemGlyph";
+
+interface CrewRosterProps {
+  room: RoomState;
+  meId: string;
+  /** Live reactions to recent events, keyed by sailor. */
+  reactions?: Record<PlayerId, Reaction>;
+}
+
+export function CrewRoster({ room, meId, reactions }: CrewRosterProps) {
+  const maxStrikes = room.settings.maxStrikes;
+  return (
+    <ul className="space-y-2.5">
+      {room.players.map((player, index) => {
+        const isMe = player.id === meId;
+        const relics = relicsOf(room, player.id);
+        const solved = solvedKeys(room, player.id).size;
+        const island = islandByKey(room, player.currentIslandKey);
+        const color = isMe ? "#ffd873" : SAILOR_COLORS[(index + 1) % SAILOR_COLORS.length];
+        return (
+          <li
+            key={player.id}
+            className={cn(
+              "rounded-md border bg-abyss/40 p-3",
+              isMe ? "border-gold/40" : "border-brass/15",
+              player.isEliminated && "opacity-60",
+            )}
+          >
+            <div className="flex items-center gap-3">
+              <span className="relative h-11 w-11 shrink-0">
+                {player.outfit?.frame ? (
+                  <LivingAvatar
+                    avatarId={player.avatarId}
+                    outfit={player.outfit}
+                    reaction={reactions?.[player.id]}
+                    faded={!player.isOnline || player.isEliminated}
+                    title={player.username}
+                    className="h-full w-full scale-[1.18]"
+                  />
+                ) : (
+                  <span className="block h-full w-full rounded-full border-2 bg-sea" style={{ borderColor: color }}>
+                    <LivingAvatar
+                      avatarId={player.avatarId}
+                      outfit={player.outfit}
+                      reaction={reactions?.[player.id]}
+                      faded={!player.isOnline || player.isEliminated}
+                      title={player.username}
+                      framed={false}
+                      className="h-full w-full"
+                    />
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    "absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-abyss",
+                    player.isOnline ? "bg-kelp-light" : "bg-parchment/30",
+                  )}
+                  aria-hidden
+                />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5 truncate font-display text-xl leading-none text-parchment">
+                  {player.isHost && <CrownIcon size={14} className="shrink-0 text-gold" aria-label="Captain" />}
+                  <span className="truncate">{player.username}</span>
+                  {isMe && <Badge tone="brass" className="ml-1 px-1.5 py-0 text-[0.5rem]">You</Badge>}
+                </p>
+                <p className="mt-1 truncate font-body text-sm italic text-parchment/55">
+                  {player.isEliminated
+                    ? player.followingId
+                      ? `Watching ${room.players.find((p) => p.id === player.followingId)?.username ?? "a crewmate"}`
+                      : "Claimed by the sea"
+                    : !player.isOnline
+                      ? "Lost in the fog…"
+                      : island
+                        ? `Anchored at ${island.name}`
+                        : "Adrift"}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-0.5" aria-label={`${player.strikes} of ${maxStrikes} strikes`}>
+                {Array.from({ length: maxStrikes }, (_, i) => (
+                  <SkullIcon key={i} size={13} className={i < player.strikes ? "text-blood-light" : "text-parchment/15"} />
+                ))}
+              </div>
+            </div>
+            <div className="mt-2.5 flex items-center justify-between gap-2">
+              <div className="flex gap-1" aria-label={`${relics.length} of ${REQUIRED_RELICS.length} relics`}>
+                {REQUIRED_RELICS.map((r) => (
+                  <span
+                    key={r}
+                    title={itemInfo(r).name}
+                    className={cn(
+                      "flex h-6 w-6 items-center justify-center rounded-full border",
+                      relics.includes(r) ? "border-gold/60 bg-gold/10 text-gold" : "border-parchment/10 text-parchment/15",
+                    )}
+                  >
+                    <ItemGlyph glyph={itemInfo(r).glyph} size={13} />
+                  </span>
+                ))}
+              </div>
+              <span className="flex items-center gap-2 font-ui text-[0.55rem] uppercase tracking-[0.2em] text-brass/60">
+                {player.isEliminated && player.followingId && <BinocularsIcon size={12} className="text-foam" aria-hidden />}
+                {player.hintsUsed > 0 && (
+                  <span className="flex items-center gap-0.5" title={`${player.hintsUsed} whispers bought`}>
+                    <LightbulbIcon size={11} /> {player.hintsUsed}
+                  </span>
+                )}
+                {solved} solved
+              </span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}

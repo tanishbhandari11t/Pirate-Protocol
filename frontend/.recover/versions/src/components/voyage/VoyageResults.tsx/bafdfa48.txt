@@ -1,0 +1,231 @@
+"use client";
+
+import { animate, motion, useReducedMotion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { cn } from "@/lib/cn";
+import { achievementsFor } from "@/lib/game/achievements";
+import { findPlayer, relicsOf, solvedKeys, voyageStartedAt, type VoyageStats } from "@/lib/game/selectors";
+import { describeSettings } from "@/lib/crew/reducer";
+import { REQUIRED_RELICS, type FinishReason, type RoomState } from "@/lib/socket/contract";
+import { PirateAvatar } from "../avatar/PirateAvatar";
+import { CrownIcon, ScrollIcon, SkullIcon } from "../icons";
+import { Button } from "../ui/Button";
+import { useNotify } from "../ui/Notifications";
+import { ParchmentBackdrop } from "../ui/ParchmentBackdrop";
+import { ChestUnlocks } from "./ChestUnlocks";
+import { ItemGlyph } from "./ItemGlyph";
+import { formatClock, voyageEndedAt } from "./VoyageHud";
+import { VoyageReplay } from "./VoyageReplay";
+import { downloadWantedPoster } from "./wantedPoster";
+
+const EASE = [0.22, 1, 0.36, 1] as const;
+
+const HEADLINE: Record<FinishReason, string> = {
+  treasure: "Treasure Discovered",
+  time: "The Tide Has Turned",
+  wreck: "Lost to the Deep",
+};
+
+function verdictLine(reason: FinishReason | null, winnerName: string | null) {
+  if (reason === "treasure" && winnerName) return `The Lost Vault was opened by ${winnerName}.`;
+  if (reason === "time") {
+    return winnerName ? `The clock ran out. ${winnerName} takes the day on points.` : "The clock ran out with no clear victor.";
+  }
+  if (reason === "wreck") return "Every sailor was claimed by the sea before the Vault could be reached.";
+  return "The sea keeps her secrets — for now.";
+}
+
+interface VoyageResultsProps {
+  room: RoomState;
+  meId: string;
+  stats: VoyageStats;
+  sailing: boolean;
+  onSailAgain: () => void;
+  onHome: () => void;
+}
+
+export function VoyageResults({ room, meId, stats, sailing, onSailAgain, onHome }: VoyageResultsProps) {
+  const winner = findPlayer(room, room.winnerPlayerId);
+  const me = findPlayer(room, meId);
+  const ended = voyageEndedAt(room);
+  const duration = ended ? formatClock(ended - voyageStartedAt(room)) : null;
+  const { notify } = useNotify();
+  const [drawing, setDrawing] = useState(false);
+  const maxStrikes = room.settings.maxStrikes;
+  const myScore = room.scores.find((s) => s.playerId === meId) ?? null;
+  const winnerName = winner ? (winner.id === meId ? "you" : winner.username) : null;
+
+  const poster = async () => {
+    setDrawing(true);
+    try {
+      await downloadWantedPoster(room, stats, duration);
+      notify({ tone: "success", title: "Poster nailed up", message: "Your Wanted poster is in your downloads." });
+    } catch (error) {
+      notify({ tone: "danger", title: "The ink smudged", message: error instanceof Error ? error.message : "Try again." });
+    } finally {
+      setDrawing(false);
+    }
+  };
+
+  const tallies = [
+    { label: "Islands discovered", value: stats.islandsDiscovered, suffix: `/${stats.islandsTotal}` },
+    { label: "Puzzles solved", value: stats.puzzlesSolved },
+    { label: "Relics recovered", value: stats.relicsRecovered, suffix: `/${REQUIRED_RELICS.length}` },
+    { label: "Traps sprung", value: stats.trapsSprung },
+  ];
+
+  return (
+    <main className="relative flex min-h-dvh items-center justify-center overflow-x-hidden px-4 py-10">
+      <motion.article
+        initial={{ opacity: 0, y: 40, rotate: -1.5 }}
+        animate={{ opacity: 1, y: 0, rotate: 0 }}
+        transition={{ duration: 1, ease: EASE }}
+        className="relative w-full max-w-3xl"
+      >
+        <ParchmentBackdrop variant={2} />
+        <div className="relative px-6 pb-10 pt-12 text-center text-ink sm:px-12">
+          <p className="font-ui text-[0.62rem] font-bold uppercase tracking-[0.45em] text-ink-soft/80">☠ Pirate Protocol ☠</p>
+          <h1 className="mt-2 font-display text-[clamp(2.75rem,9vw,5rem)] leading-none text-blood drop-shadow-[0_2px_0_rgba(255,240,200,0.4)]">
+            {room.finishReason ? HEADLINE[room.finishReason] : "The Voyage Ends"}
+          </h1>
+          <p className="mt-2 font-body text-lg italic text-ink-soft sm:text-xl">{verdictLine(room.finishReason, winnerName)}</p>
+
+          <div className="mt-6 inline-flex flex-col items-center">
+            <span className="font-ui text-[0.58rem] font-bold uppercase tracking-[0.35em] text-ink-soft/70">Crew</span>
+            <span className="font-display text-3xl uppercase tracking-wider text-ink">{room.name}</span>
+            {duration && <span className="font-ui text-[0.6rem] uppercase tracking-[0.3em] text-ink-soft/70">Voyage of {duration}</span>}
+            <span className="mt-1 font-body text-sm italic text-ink-soft/70">{describeSettings(room.settings)}</span>
+          </div>
+
+          <dl className="mx-auto mt-8 grid max-w-xl grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
+            {tallies.map((t, i) => (
+              <motion.div
+                key={t.label}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5 + i * 0.15 }}
+              >
+                <dd className="font-display text-4xl leading-none text-ink">
+                  <CountUp to={t.value} delay={0.5 + i * 0.15} />
+                  {t.suffix && <span className="text-2xl text-ink-soft/70">{t.suffix}</span>}
+                </dd>
+                <dt className="mt-1 font-ui text-[0.55rem] font-bold uppercase tracking-[0.2em] text-ink-soft/80">{t.label}</dt>
+              </motion.div>
+            ))}
+          </dl>
+
+          <motion.div
+            initial={{ scale: 2.4, opacity: 0, rotate: -30 }}
+            animate={{ scale: 1, opacity: 1, rotate: -8 }}
+            transition={{ delay: 1.3, type: "spring", stiffness: 260, damping: 16 }}
+            className="mx-auto mt-8 flex h-32 w-32 flex-col items-center justify-center rounded-full border-4 border-double border-blood/80 bg-blood/10 text-blood"
+          >
+            <span className="font-ui text-[0.55rem] font-bold uppercase tracking-[0.3em]">{myScore ? "Your score" : "Plunder"}</span>
+            <span className="font-display text-4xl leading-none">
+              <CountUp to={myScore?.score ?? stats.plunder} delay={1.4} />
+            </span>
+            {myScore && <span className="font-ui text-[0.5rem] font-bold uppercase tracking-[0.25em]">Rank {myScore.rank}</span>}
+          </motion.div>
+
+          <ul className="mx-auto mt-8 grid max-w-2xl gap-3 sm:grid-cols-2">
+            {[...room.players]
+              .sort((a, b) => rankOf(room, a.id) - rankOf(room, b.id))
+              .map((p) => {
+              const relics = relicsOf(room, p.id).length;
+              const honours = achievementsFor(room, p.id);
+              const score = room.scores.find((s) => s.playerId === p.id);
+              return (
+                <li
+                  key={p.id}
+                  className={cn(
+                    "rounded border-2 px-3 py-2 text-left",
+                    p.id === room.winnerPlayerId ? "border-blood/60 bg-blood/5" : "border-ink/15",
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                  <span className="h-11 w-11 shrink-0 overflow-hidden rounded-full border-2 border-ink/40">
+                    <PirateAvatar avatarId={p.avatarId} outfit={p.outfit} faded={p.isEliminated} className="h-full w-full" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 truncate font-display text-xl leading-none text-ink">
+                      {p.id === room.winnerPlayerId && <CrownIcon size={15} className="shrink-0 text-blood" />}
+                      <span className="truncate">{p.username}</span>
+                      {p.id === meId && <span className="font-ui text-[0.5rem] uppercase tracking-[0.2em] text-ink-soft">(you)</span>}
+                    </p>
+                    <p className="mt-0.5 font-body text-sm italic text-ink-soft">
+                      {p.isEliminated ? "Claimed by the sea" : `${solvedKeys(room, p.id).size} solved · ${relics}/${REQUIRED_RELICS.length} relics`}
+                    </p>
+                  </div>
+                  <span className="flex shrink-0 flex-col items-end gap-1">
+                    {score && (
+                      <span className="font-display text-2xl leading-none text-ink tabular-nums" title={`Rank ${score.rank}`}>
+                        {score.score.toLocaleString()}
+                      </span>
+                    )}
+                    <span className="flex gap-0.5" aria-label={`${p.strikes} of ${maxStrikes} strikes`}>
+                      {Array.from({ length: maxStrikes }, (_, i) => (
+                        <SkullIcon key={i} size={12} className={i < p.strikes ? "text-blood" : "text-ink/15"} />
+                      ))}
+                    </span>
+                  </span>
+                  </div>
+                  {honours.length > 0 && (
+                    <ul className="mt-2 flex flex-wrap gap-1.5" aria-label={`${p.username}'s honours`}>
+                      {honours.map((a, i) => (
+                        <motion.li
+                          key={a.id}
+                          title={a.description}
+                          initial={{ opacity: 0, scale: 0.6 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ delay: 1.6 + i * 0.12 }}
+                          className="inline-flex items-center gap-1 rounded-full border border-ink/25 bg-parchment-light/60 px-2 py-0.5 font-ui text-[0.55rem] font-bold uppercase tracking-[0.12em] text-ink-soft"
+                        >
+                          <ItemGlyph glyph={a.glyph} size={11} />
+                          {a.title}
+                        </motion.li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          {me && <ChestUnlocks room={room} meId={meId} avatarId={me.avatarId} />}
+
+          <VoyageReplay room={room} meId={meId} />
+
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+            <Button size="xl" onClick={onSailAgain} loading={sailing}>
+              Sail Again
+            </Button>
+            <Button variant="parchment" size="lg" onClick={poster} loading={drawing} icon={<ScrollIcon size={16} />}>
+              Wanted poster
+            </Button>
+            <Button variant="parchment" size="lg" onClick={onHome} disabled={sailing}>
+              Return to port
+            </Button>
+          </div>
+        </div>
+      </motion.article>
+    </main>
+  );
+}
+
+function rankOf(room: RoomState, playerId: string) {
+  return room.scores.find((s) => s.playerId === playerId)?.rank ?? Number.MAX_SAFE_INTEGER;
+}
+
+function CountUp({ to, delay = 0 }: { to: number; delay?: number }) {
+  const reduced = useReducedMotion();
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    if (reduced) {
+      const t = window.setTimeout(() => setValue(to), 0);
+      return () => window.clearTimeout(t);
+    }
+    const controls = animate(0, to, { duration: 1.2, delay, ease: "easeOut", onUpdate: (v) => setValue(Math.round(v)) });
+    return () => controls.stop();
+  }, [to, delay, reduced]);
+  return <>{value.toLocaleString()}</>;
+}

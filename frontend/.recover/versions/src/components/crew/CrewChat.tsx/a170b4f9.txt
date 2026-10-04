@@ -1,0 +1,243 @@
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { cn } from "@/lib/cn";
+import { useCrew } from "@/lib/crew/CrewProvider";
+import { SAILOR_COLORS } from "@/lib/game/chart";
+import { CHAT_MAX, QUICK_CALLS, QUICK_CALL_IDS, type ChatMessage, type PlayerSnapshot } from "@/lib/socket/contract";
+import { describeError } from "@/lib/socket/errors";
+import { PirateAvatar } from "../avatar/PirateAvatar";
+import { ChatIcon, QuickCallIcon, SendIcon } from "../icons";
+import { Panel } from "../ui/Panel";
+
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+/** Consecutive messages from one sailor within this window share a single header. */
+const GROUP_WINDOW_MS = 2 * 60_000;
+
+interface CrewChatProps {
+  /** Hide the panel chrome when the chat sits inside another container (e.g. a voyage tab). */
+  bare?: boolean;
+  /** Show the one-tap calls row. */
+  showCalls?: boolean;
+  className?: string;
+}
+
+export function CrewChat({ bare = false, showCalls = true, className }: CrewChatProps) {
+  const { state, sendChat, sendCall, setChatOpen, pending } = useCrew();
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLOListElement>(null);
+  const players = state.room?.players;
+  const sending = pending.has("chat:send");
+
+  useEffect(() => {
+    setChatOpen(true);
+    return () => setChatOpen(false);
+  }, [setChatOpen]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    list?.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+  }, [state.chat.length]);
+
+  const colorOf = useMemo(() => {
+    const map = new Map<string, string>();
+    players?.forEach((p, i) => map.set(p.id, p.id === state.playerId ? "#ffd873" : SAILOR_COLORS[(i + 1) % SAILOR_COLORS.length]));
+    return map;
+  }, [players, state.playerId]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!draft.trim() || sending) return;
+    const res = await sendChat(draft);
+    if (res.ok) {
+      setDraft("");
+      setError(null);
+    } else {
+      setError(describeError(res.error.code, res.error.message));
+    }
+  };
+
+  const call = async (callId: (typeof QUICK_CALL_IDS)[number]) => {
+    const res = await sendCall(callId);
+    setError(res.ok ? null : describeError(res.error.code, res.error.message));
+  };
+
+  const body = (
+    <div className={cn("flex min-h-0 flex-col", className)}>
+      <ol
+        ref={listRef}
+        className="max-h-72 min-h-40 flex-1 space-y-1.5 overflow-y-auto px-4 py-3 short:max-h-48"
+        aria-live="polite"
+        aria-label="Crew chat"
+      >
+        {state.chat.length === 0 && (
+          <li className="py-6 text-center font-body italic text-parchment/40">
+            The deck is quiet. Say something to your crew.
+          </li>
+        )}
+        <AnimatePresence initial={false}>
+          {state.chat.map((message, index) => (
+            <ChatLine
+              key={message.id}
+              message={message}
+              previous={state.chat[index - 1]}
+              author={players?.find((p) => p.id === message.playerId) ?? null}
+              color={message.playerId ? colorOf.get(message.playerId) : undefined}
+              isMe={message.playerId === state.playerId}
+            />
+          ))}
+        </AnimatePresence>
+      </ol>
+
+      {showCalls && (
+        <div className="flex gap-1.5 overflow-x-auto border-t border-brass/15 px-3 py-2" role="toolbar" aria-label="Quick calls">
+          {QUICK_CALL_IDS.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => call(id)}
+              disabled={sending}
+              title={QUICK_CALLS[id]}
+              className="flex shrink-0 items-center gap-1.5 rounded-full border border-brass/30 px-2.5 py-1 font-ui text-[0.6rem] uppercase tracking-wider text-brass-light transition hover:border-brass-light hover:bg-brass/10 disabled:opacity-40"
+            >
+              <QuickCallIcon callId={id} size={12} />
+              {QUICK_CALLS[id].replace(/[.!—].*$/, "")}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={submit} className="flex items-center gap-2 border-t border-brass/15 px-3 py-2.5">
+        <label htmlFor="crew-chat-input" className="sr-only">
+          Message your crew
+        </label>
+        <input
+          id="crew-chat-input"
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setError(null);
+          }}
+          maxLength={CHAT_MAX}
+          autoComplete="off"
+          placeholder="Message your crew…"
+          className="h-9 min-w-0 flex-1 rounded border border-brass/25 bg-abyss/60 px-3 font-body text-parchment outline-none transition placeholder:text-parchment/30 focus:border-brass-light"
+          aria-invalid={!!error}
+          aria-describedby={error ? "crew-chat-error" : undefined}
+        />
+        <span
+          className={cn(
+            "w-9 shrink-0 text-right font-ui text-[0.55rem] tabular-nums",
+            draft.length > CHAT_MAX - 20 ? "text-ember" : "text-brass/40",
+          )}
+          aria-hidden
+        >
+          {CHAT_MAX - draft.length}
+        </span>
+        <button
+          type="submit"
+          disabled={!draft.trim() || sending}
+          aria-label="Send message"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-brass/40 text-brass-light transition hover:bg-brass/15 disabled:opacity-40"
+        >
+          <SendIcon size={16} />
+        </button>
+      </form>
+      {error && (
+        <p id="crew-chat-error" role="alert" className="px-4 pb-2 font-body text-sm italic text-ember">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+
+  if (bare) return body;
+  return (
+    <Panel
+      eyebrow="Below decks"
+      title="Crew Chatter"
+      padded={false}
+      actions={<ChatIcon size={18} className="text-brass/70" aria-hidden />}
+    >
+      {body}
+    </Panel>
+  );
+}
+
+function ChatLine({
+  message,
+  previous,
+  author,
+  color,
+  isMe,
+}: {
+  message: ChatMessage;
+  previous: ChatMessage | undefined;
+  author: PlayerSnapshot | null;
+  color: string | undefined;
+  isMe: boolean;
+}) {
+  if (message.kind === "system") {
+    return (
+      <motion.li
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="py-1 text-center font-body text-sm italic text-brass/70"
+      >
+        {message.text}
+      </motion.li>
+    );
+  }
+
+  const grouped =
+    previous?.playerId === message.playerId &&
+    previous.kind !== "system" &&
+    message.sentAt - previous.sentAt < GROUP_WINDOW_MS;
+
+  return (
+    <motion.li
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={cn("flex gap-2.5", grouped ? "mt-0.5" : "mt-2")}
+    >
+      <span className="w-7 shrink-0">
+        {!grouped && (
+          <span className="block h-7 w-7 overflow-hidden rounded-full border" style={{ borderColor: color }}>
+            {author ? (
+              <PirateAvatar avatarId={author.avatarId} className="h-full w-full" />
+            ) : (
+              <span className="block h-full w-full bg-parchment/10" />
+            )}
+          </span>
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        {!grouped && (
+          <p className="flex items-baseline gap-2">
+            <span className="truncate font-ui text-[0.65rem] font-bold uppercase tracking-wider" style={{ color }}>
+              {isMe ? "You" : author?.name ?? "A departed sailor"}
+            </span>
+            <time className="font-ui text-[0.55rem] tabular-nums text-brass/40">{timeFormat.format(message.sentAt)}</time>
+          </p>
+        )}
+        {message.kind === "call" ? (
+          <p className="mt-0.5 inline-flex items-center gap-1.5 rounded-full border border-brass/30 bg-brass/10 px-2.5 py-0.5 font-body text-sm text-brass-light">
+            {message.callId && <QuickCallIcon callId={message.callId} size={13} />}
+            {message.text}
+          </p>
+        ) : (
+          <p className="break-words font-body leading-snug text-parchment/85">
+            {message.text}
+            {message.filtered && (
+              <span className="ml-1.5 font-ui text-[0.5rem] uppercase tracking-wider text-brass/40" title="Some words were masked">
+                tidied
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+    </motion.li>
+  );
+}
