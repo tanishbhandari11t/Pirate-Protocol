@@ -155,7 +155,7 @@ Edit **`src/lib/avatars.ts`** — skin, hat, hair, beard, eyepatch, earring. The
 | Headlines | *Pirata One* |
 | Body text | *IM Fell English* |
 | Labels & buttons | *Cinzel* |
-
+ 
 All colours, fonts and animations live in `src/app/globals.css`.
 
 ---

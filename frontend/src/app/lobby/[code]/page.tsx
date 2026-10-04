@@ -55,7 +55,7 @@ export default function LobbyPage() {
   }, [room, hasSeat, code, leaving, rejoinCrew, router, notify]);
 
   useEffect(() => {
-    if (room && (state.voyageStarted || room.phase === "in-game")) {
+    if (room && (state.voyageStarted || room.phase === "in-game" || room.phase === "finished")) {
       router.push(`/voyage/${room.code}`);
     }
   }, [room, state.voyageStarted, router]);

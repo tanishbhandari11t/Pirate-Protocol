@@ -56,6 +56,16 @@ export interface RoomSnapshot {
   createdAt: number;
 }
 
+export type VoyagePhase = "duties" | "chart" | "won" | "lost";
+
+export interface DutyOption {
+  id: string;
+  label: string;
+}
+
+/** This sailor's private watch. The correct answer stays on the server. */
+}
+
 /** Returned to a client once it holds a seat in a room. */
 export interface SeatGrant {
   room: RoomSnapshot;

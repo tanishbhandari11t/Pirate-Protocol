@@ -14,10 +14,13 @@ import { useNotify } from "@/components/ui/Notifications";
 import { connectSocket, getSocket, onServerEvent, request, type RequestResult } from "../socket/client";
 import type {
   CreateCrewPayload,
+  GameActPayload,
+  GameActResult,
   JoinCrewPayload,
   PlayerSnapshot,
   RoomCode,
   SeatGrant,
+  VoyageSnapshot,
 } from "../socket/contract";
 import { describeError } from "../socket/errors";
 import { profileStore, seatStore } from "../storage";
@@ -33,6 +36,8 @@ interface CrewApi {
   leaveCrew: () => Promise<void>;
   setReady: (ready: boolean) => Promise<RequestResult<PlayerSnapshot>>;
   startVoyage: () => Promise<RequestResult<null>>;
+  syncVoyage: () => Promise<RequestResult<VoyageSnapshot>>;
+  actOnVoyage: (payload: GameActPayload) => Promise<RequestResult<GameActResult>>;
 }
 
 const CrewContext = createContext<CrewApi | null>(null);

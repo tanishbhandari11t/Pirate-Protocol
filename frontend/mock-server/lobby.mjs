@@ -1,8 +1,8 @@
-// Development stub of the Phase 1 lobby protocol (see src/lib/socket/contract.ts).
-// It implements crew/room lifecycle only — no game rules. Replace with the real backend.
+// Practice harbour: lobby plus a cooperative voyage (see src/lib/socket/contract.ts).
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
+import { abandonDuty, act, beginVoyage, snapshotFor } from "./voyage.mjs";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -11,7 +11,7 @@ const AVATARS = new Set([
 ]);
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
-const COUNTDOWN_SECONDS = 3;
+const COUNTDOWN_SECONDS = 1;
 const DISCONNECT_GRACE_MS = 30_000;
 
 /** @type {Map<string, any>} */

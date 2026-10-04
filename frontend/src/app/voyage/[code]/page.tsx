@@ -1,12 +1,8 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TopBar } from "@/components/layout/TopBar";
-import { TreasureMapSketch } from "@/components/map/TreasureMapSketch";
-import { DoorIcon } from "@/components/icons";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Ornaments";
 import { ParchmentCard } from "@/components/ui/ParchmentCard";
 import { useCrew } from "@/lib/crew/CrewProvider";

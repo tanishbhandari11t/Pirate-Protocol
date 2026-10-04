@@ -5,6 +5,7 @@ import type {
   PlayerSnapshot,
   RoomSnapshot,
   SeatGrant,
+  VoyageSnapshot,
 } from "../socket/contract";
 
 export type LogTone = "info" | "join" | "leave" | "ready" | "captain" | "voyage";
@@ -21,6 +22,7 @@ export interface CrewState {
   playerId: PlayerId | null;
   countdown: { startsAt: number; seconds: number } | null;
   voyageStarted: boolean;
+  voyage: VoyageSnapshot | null;
   log: LogEntry[];
   logSeq: number;
 }
@@ -30,6 +32,7 @@ export const initialCrewState: CrewState = {
   playerId: null,
   countdown: null,
   voyageStarted: false,
+  voyage: null,
   log: [],
   logSeq: 0,
 };
@@ -43,6 +46,7 @@ export type CrewAction =
   | { type: "captain-changed"; captainId: PlayerId; at: number }
   | { type: "voyage-starting"; startsAt: number; seconds: number; at: number }
   | { type: "voyage-started"; at: number }
+  | { type: "voyage-state"; voyage: VoyageSnapshot }
   | { type: "reset" };
 
 const LOG_LIMIT = 40;

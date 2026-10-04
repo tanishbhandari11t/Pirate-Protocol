@@ -11,6 +11,7 @@ const PIRATE_MESSAGES: Record<ClientErrorCode, string> = {
   NOT_ENOUGH_PLAYERS: "Too few hands on deck to set sail.",
   PLAYERS_NOT_READY: "Not every sailor is ready to weigh anchor.",
   SESSION_EXPIRED: "Your berth was given away. Board the ship anew.",
+  NOT_IN_GAME: "The voyage has not begun.",
   RATE_LIMITED: "Easy, sailor — too many orders at once.",
   INTERNAL: "A storm struck the harbour. Try again shortly.",
   OFFLINE: "The harbour is shrouded — the server cannot be reached.",
