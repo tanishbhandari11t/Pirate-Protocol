@@ -152,3 +152,123 @@ body {
     transform: rotate(-2.2deg) translateY(0);
   }
   50% {
+    transform: rotate(2.2deg) translateY(-6px);
+  }
+}
+
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(1.5deg);
+  }
+}
+
+@keyframes wave-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes fog-drift {
+  0% {
+    transform: translate3d(-12%, 0, 0) scale(1);
+    opacity: 0;
+  }
+  15% {
+    opacity: var(--fog-opacity, 0.5);
+  }
+  85% {
+    opacity: var(--fog-opacity, 0.5);
+  }
+  100% {
+    transform: translate3d(12%, -3%, 0) scale(1.15);
+    opacity: 0;
+  }
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes flicker {
+  0%,
+  100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgb(255 190 90 / 0.8));
+  }
+  40% {
+    opacity: 0.82;
+    filter: drop-shadow(0 0 4px rgb(255 190 90 / 0.5));
+  }
+  60% {
+    opacity: 0.95;
+    filter: drop-shadow(0 0 11px rgb(255 190 90 / 0.9));
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes glint {
+  0%,
+  70% {
+    transform: translateX(-120%) skewX(-20deg);
+  }
+  100% {
+    transform: translateX(220%) skewX(-20deg);
+  }
+}
+
+.animate-wave {
+  animation: wave-drift var(--wave-duration, 18s) linear infinite;
+  will-change: transform;
+}
+
+.animate-glint::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 245 210 / 0.55), transparent);
+  animation: glint 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgb(200 155 69 / 0.08) 0%,
+    rgb(241 214 141 / 0.25) 50%,
+    rgb(200 155 69 / 0.08) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -184,6 +184,7 @@ src/game/map/             Adjacency + start-island cache
 src/game/score.ts         Score rules
 src/contract/             Socket contract for clients
 src/websocket/            Gateway + RealtimeBus
+frontend/                 Next.js client (Person B)
 docker-compose.yml        Postgres :5433
 ```
 
@@ -213,6 +214,16 @@ npm run test:smoke       # needs Docker + push + seed
 3. Voyage: `map:move`, `island:explore`, `puzzle:submit`, `trade:offer`.
 4. Treat `room:state` as source of truth; use `destinations` for the map UI.
 5. Never trust the client with answers; never expect `answerHash` in JSON.
+
+## Playing with the frontend
+
+The Next.js client lives in `frontend/` and talks to this server through an adapter in `frontend/src/lib/socket/nest/`.
+
+1. Set `PORT=4000` in `.env` so the API does not collide with Next.js on 3000, then `npm run start:dev`.
+2. In `frontend/.env.local`, set `NEXT_PUBLIC_BACKEND=nest` and `NEXT_PUBLIC_SOCKET_URL=http://localhost:4000`.
+3. In `frontend/`, run `npm install` and `npm run dev`, then open `http://localhost:3000`.
+
+`frontend/README.md` covers translation details and troubleshooting.
 
 ## Known limits
 

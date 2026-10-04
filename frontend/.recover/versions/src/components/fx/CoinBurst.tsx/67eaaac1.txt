@@ -1,0 +1,70 @@
+"use client";
+
+import { motion, useReducedMotion } from "framer-motion";
+import { useMemo } from "react";
+import { cn } from "@/lib/cn";
+import { seeded } from "@/lib/random";
+
+interface CoinBurstProps {
+  count?: number;
+  /** Same seed, same spray; lets server and client agree and keeps re-renders stable. */
+  seed?: number;
+  /** How far, in pixels, the widest coin flies sideways. */
+  spread?: number;
+  /** Coin diameter in pixels. */
+  size?: number;
+  delay?: number;
+  className?: string;
+}
+
+/** A fountain of gold coins that arcs up and tumbles away. Purely decorative. */
+export function CoinBurst({ count = 18, seed = 1, spread = 180, size = 18, delay = 0, className }: CoinBurstProps) {
+  const still = useReducedMotion();
+  const coins = useMemo(() => {
+    const rand = seeded(seed);
+    return Array.from({ length: count }, () => {
+      const dx = (rand() * 2 - 1) * spread;
+      const rise = 80 + rand() * 140;
+      return {
+        dx,
+        rise,
+        fall: rise * -0.2 + 160 + rand() * 120,
+        spin: (rand() > 0.5 ? 1 : -1) * (360 + rand() * 720),
+        scale: 0.6 + rand() * 0.6,
+        wait: rand() * 0.25,
+        dur: 1.1 + rand() * 0.6,
+      };
+    });
+  }, [count, seed, spread]);
+
+  if (still) return null;
+
+  return (
+    <div aria-hidden className={cn("pointer-events-none absolute inset-0 flex items-center justify-center overflow-visible", className)}>
+      {coins.map((coin, i) => (
+        <motion.span
+          key={i}
+          className="absolute rounded-full"
+          style={{
+            width: size * coin.scale,
+            height: size * coin.scale,
+            background: "radial-gradient(circle at 35% 30%, #fff2b0 0%, #ffd873 35%, #b8860b 80%, #7a5a10 100%)",
+            boxShadow: "inset 0 0 0 1.5px rgba(122,90,16,0.8), 0 0 8px rgba(255,216,115,0.6)",
+          }}
+          initial={{ x: 0, y: 0, opacity: 0, rotateY: 0 }}
+          animate={{
+            x: [0, coin.dx * 0.6, coin.dx],
+            y: [0, -coin.rise, coin.fall],
+            opacity: [0, 1, 1, 0],
+            rotateY: coin.spin,
+          }}
+          transition={{
+            default: { duration: coin.dur, delay: delay + coin.wait, ease: [0.2, 0.7, 0.4, 1], times: [0, 0.45, 1] },
+            opacity: { duration: coin.dur, delay: delay + coin.wait, times: [0, 0.08, 0.75, 1] },
+            rotateY: { duration: coin.dur, delay: delay + coin.wait, ease: "linear" },
+          }}
+        />
+      ))}
+    </div>
+  );
+}

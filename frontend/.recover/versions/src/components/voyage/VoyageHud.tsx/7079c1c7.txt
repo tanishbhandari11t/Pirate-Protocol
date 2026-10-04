@@ -1,0 +1,105 @@
+"use client";
+
+import Link from "next/link";
+import { cn } from "@/lib/cn";
+import { heldRelics } from "@/lib/game/selectors";
+import { REQUIRED_RELICS, type PublicPlayer, type RoomState } from "@/lib/socket/contract";
+import { toggleMuted, useMuted } from "@/lib/sound";
+import { ConnectionLantern } from "../layout/ConnectionLantern";
+import { DoorIcon, SkullIcon, SoundIcon } from "../icons";
+import { ItemGlyph } from "./ItemGlyph";
+import { VoyageClock } from "./VoyageClock";
+
+export function formatClock(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+export function voyageEndedAt(room: RoomState) {
+  const found = room.log.findLast((e) => e.type === "TREASURE_FOUND" || e.type === "TIME_UP" || e.type === "CREW_WRECKED");
+  return found ? Date.parse(found.createdAt) : null;
+}
+
+interface VoyageHudProps {
+  room: RoomState;
+  me: PublicPlayer;
+  /** This sailor's score, as computed by the server. */
+  score: number;
+  onLeave: () => void;
+}
+
+export function VoyageHud({ room, me, score, onLeave }: VoyageHudProps) {
+  const muted = useMuted();
+  const relics = heldRelics(room).length;
+  const maxStrikes = room.settings.maxStrikes;
+
+  return (
+    <header data-tour="hud" className="relative z-20 border-b border-brass/25 bg-[linear-gradient(180deg,rgba(7,19,29,0.96),rgba(3,7,12,0.88))] shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+      <div className="mx-auto flex max-w-[110rem] items-center gap-3 px-3 py-2 sm:gap-5 sm:px-5">
+        <Link href="/" className="hidden shrink-0 font-display text-2xl leading-none text-gilded md:block" aria-label="Pirate Protocol home">
+          PP
+        </Link>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-display text-xl leading-none text-parchment sm:text-2xl">{room.name}</p>
+          <p className="mt-0.5 font-ui text-[0.55rem] uppercase tracking-[0.3em] text-brass/70">
+            Ship {room.code} · {room.status === "FINISHED" ? "Voyage complete" : "At sea"}
+          </p>
+        </div>
+
+        <dl className="flex shrink-0 items-center gap-3 sm:gap-5">
+          <VoyageClock className="max-sm:hidden" />
+          <Stat label="Relics">
+            <ItemGlyph glyph="compass" size={14} className={relics === REQUIRED_RELICS.length ? "text-gold" : "text-brass"} />
+            <span className={cn("tabular-nums", relics === REQUIRED_RELICS.length && "text-gold")}>
+              {relics}/{REQUIRED_RELICS.length}
+            </span>
+          </Stat>
+          <Stat label="Strikes">
+            <span className="flex gap-0.5" aria-label={`${me.strikes} of ${maxStrikes}`}>
+              {Array.from({ length: maxStrikes }, (_, i) => (
+                <SkullIcon key={i} size={13} className={i < me.strikes ? "text-blood-light" : "text-parchment/20"} />
+              ))}
+            </span>
+          </Stat>
+          <Stat label="Score" className="max-md:hidden">
+            <span className={cn("tabular-nums", score < 0 ? "text-blood-light" : "text-gold")}>{score.toLocaleString()}</span>
+          </Stat>
+        </dl>
+
+        <ConnectionLantern className="shrink-0" />
+        <button
+          type="button"
+          onClick={toggleMuted}
+          aria-label={muted ? "Unmute sound" : "Mute sound"}
+          aria-pressed={muted}
+          title={muted ? "Unmute (M)" : "Mute (M)"}
+          className="shrink-0 rounded border border-brass/25 p-1.5 text-brass/80 transition hover:text-brass-light focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brass"
+        >
+          <SoundIcon size={18} muted={muted} />
+        </button>
+        <button
+          type="button"
+          onClick={onLeave}
+          aria-label="Abandon ship"
+          title="Abandon ship"
+          className="shrink-0 rounded border border-brass/25 p-1.5 text-brass/80 transition hover:border-blood-light/60 hover:text-blood-light focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brass"
+        >
+          <DoorIcon size={18} />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function Stat({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn("text-center", className)}>
+      <dt className="font-ui text-[0.5rem] uppercase tracking-[0.25em] text-brass/60">{label}</dt>
+      <dd className="mt-0.5 flex items-center justify-center gap-1 font-ui text-sm font-bold text-parchment">{children}</dd>
+    </div>
+  );
+}

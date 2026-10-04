@@ -1,0 +1,133 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState, type FormEvent } from "react";
+import { AvatarPicker } from "@/components/avatar/AvatarPicker";
+import { CrewBanner } from "@/components/crew/CrewBanner";
+import { CrewFormShell } from "@/components/crew/CrewFormShell";
+import { IdentityPreview } from "@/components/crew/IdentityPreview";
+import { FlagIcon, SkullIcon } from "@/components/icons";
+import { Button } from "@/components/ui/Button";
+import { LoadingScreen } from "@/components/ui/Loader";
+import { useNotify } from "@/components/ui/Notifications";
+import { Divider } from "@/components/ui/Ornaments";
+import { ParchmentCard } from "@/components/ui/ParchmentCard";
+import { TextField } from "@/components/ui/TextField";
+import { Tooltip } from "@/components/ui/Tooltip";
+import { useCrew } from "@/lib/crew/CrewProvider";
+import { randomCrewName } from "@/lib/names";
+import { CREW_NAME_MAX, PLAYER_NAME_MAX, type AvatarId } from "@/lib/socket/contract";
+import { describeError } from "@/lib/socket/errors";
+import { useProfile, useSavedOutfit } from "@/lib/storage";
+import { normalizeName, validateCrewName, validatePlayerName } from "@/lib/validation";
+
+export default function CreateCrewPage() {
+  const router = useRouter();
+  const { createCrew } = useCrew();
+  const { notify } = useNotify();
+  const profile = useProfile();
+  const outfit = useSavedOutfit();
+
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [avatarDraft, setAvatarDraft] = useState<AvatarId | null>(null);
+  const [crewName, setCrewName] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  const playerName = nameDraft ?? profile?.playerName ?? "";
+  const avatarId = avatarDraft ?? profile?.avatarId ?? "captain";
+
+  const nameError = submitted ? validatePlayerName(playerName) : null;
+  const crewError = submitted ? validateCrewName(crewName) : null;
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSubmitted(true);
+    setServerError(null);
+    if (validatePlayerName(playerName) || validateCrewName(crewName)) return;
+
+    setPending(true);
+    const res = await createCrew({
+      playerName: normalizeName(playerName),
+      crewName: normalizeName(crewName),
+      avatarId,
+    });
+
+    if (res.ok) {
+      router.push(`/lobby/${res.data.room.code}`);
+      return;
+    }
+    setPending(false);
+    const message = describeError(res.error.code, res.error.message);
+    setServerError(message);
+    notify({ tone: "danger", title: "The colours would not rise", message });
+  };
+
+  return (
+    <>
+      <CrewFormShell
+        form={
+          <ParchmentCard eyebrow="Articles of Agreement" title="Raise Your Colours">
+            <form onSubmit={onSubmit} noValidate className="space-y-5">
+              <TextField
+                label="Your pirate name"
+                placeholder="Calico Jack"
+                value={playerName}
+                onChange={(e) => setNameDraft(e.target.value)}
+                maxLength={PLAYER_NAME_MAX}
+                showCount
+                error={nameError}
+                hint="How your crew will know you."
+                autoComplete="nickname"
+                autoFocus
+              />
+              <TextField
+                label="Name of your ship"
+                placeholder="The Salted Kraken"
+                value={crewName}
+                onChange={(e) => setCrewName(e.target.value)}
+                maxLength={CREW_NAME_MAX}
+                showCount
+                error={crewError}
+                hint="Your crew sails under this banner."
+                icon={
+                  <Tooltip content="Let fate name your ship">
+                    <button
+                      type="button"
+                      onClick={() => setCrewName(randomCrewName())}
+                      className="rounded p-1 transition hover:rotate-12 hover:text-blood focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
+                      aria-label="Random ship name"
+                    >
+                      <SkullIcon size={18} />
+                    </button>
+                  </Tooltip>
+                }
+              />
+              {CAPABILITIES.avatars && <AvatarPicker value={avatarId} onChange={setAvatarDraft} />}
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm italic leading-snug text-ink-soft/80">Hats, coats and colours earned on past voyages.</p>
+                <WardrobeButton avatarId={avatarId} />
+              </div>
+              <Divider className="pt-2 text-ink-soft/50!" />
+              {serverError && (
+                <p role="alert" className="text-center font-body italic text-blood">
+                  {serverError}
+                </p>
+              )}
+              <Button type="submit" size="lg" fullWidth loading={pending} icon={<FlagIcon size={18} />}>
+                Create Crew
+              </Button>
+            </form>
+          </ParchmentCard>
+        }
+        preview={
+          <IdentityPreview name={normalizeName(playerName)} avatarId={avatarId} outfit={outfit} role="Captain">
+            <CrewBanner name={normalizeName(crewName)} />
+          </IdentityPreview>
+        }
+      />
+      <LoadingScreen show={pending} message="Raising the colours" detail="Registering your ship with the harbour master…" />
+    </>
+  );
+}

@@ -148,3 +148,84 @@ io.on("connection", (socket) => {
     const room = rooms.get(code);
     if (!room) return ack(fail("ROOM_NOT_FOUND"));
     if (room.phase !== "lobby") return ack(fail("GAME_IN_PROGRESS"));
+    if (room.players.size >= MAX_PLAYERS) return ack(fail("ROOM_FULL"));
+    const taken = [...room.players.values()].some((p) => p.name.toLowerCase() === playerName.toLowerCase());
+    if (taken) return ack(fail("NAME_TAKEN"));
+
+    const existing = current(socket);
+    if (existing) removePlayer(existing.room, existing.player.id, "left");
+
+    const player = createPlayer(socket, playerName, payload.avatarId);
+    room.players.set(player.id, player);
+    ack(seat(socket, room, player));
+    socket.to(room.code).emit("room:player-joined", { player: playerSnapshot(player, room) });
+    broadcastState(room);
+  });
+
+  socket.on("crew:rejoin", (payload, ack) => {
+    const room = rooms.get(String(payload?.roomCode ?? "").toUpperCase());
+    const player = room && [...room.players.values()].find((p) => p.sessionToken === payload?.sessionToken);
+    if (!room || !player) return ack(fail("SESSION_EXPIRED"));
+
+    clearTimeout(player.dropTimer);
+    player.socketId = socket.id;
+    player.isConnected = true;
+    ack(seat(socket, room, player));
+    socket.to(room.code).emit("room:player-updated", { player: playerSnapshot(player, room) });
+    broadcastState(room);
+  });
+
+  socket.on("crew:leave", (_payload, ack) => {
+    const ctx = current(socket);
+    if (ctx) removePlayer(ctx.room, ctx.player.id, "left");
+    ack(ok(null));
+  });
+
+  socket.on("player:ready", (payload, ack) => {
+    const ctx = current(socket);
+    if (!ctx) return ack(fail("NOT_IN_ROOM"));
+    if (ctx.room.phase !== "lobby") return ack(fail("GAME_IN_PROGRESS"));
+    ctx.player.isReady = Boolean(payload?.ready);
+    const snapshot = playerSnapshot(ctx.player, ctx.room);
+    ack(ok(snapshot));
+    io.to(ctx.room.code).emit("room:player-updated", { player: snapshot });
+    broadcastState(ctx.room);
+  });
+
+  socket.on("game:start", (_payload, ack) => {
+    const ctx = current(socket);
+    if (!ctx) return ack(fail("NOT_IN_ROOM"));
+    const { room, player } = ctx;
+    if (room.captainId !== player.id) return ack(fail("NOT_CAPTAIN"));
+    if (room.phase !== "lobby") return ack(fail("GAME_IN_PROGRESS"));
+    if (room.players.size < MIN_PLAYERS) return ack(fail("NOT_ENOUGH_PLAYERS"));
+    if ([...room.players.values()].some((p) => !p.isReady)) return ack(fail("PLAYERS_NOT_READY"));
+
+    room.phase = "starting";
+    ack(ok(null));
+    io.to(room.code).emit("game:starting", {
+      startsAt: Date.now() + COUNTDOWN_SECONDS * 1000,
+      seconds: COUNTDOWN_SECONDS,
+    });
+    broadcastState(room);
+    setTimeout(() => {
+      if (!rooms.has(room.code)) return;
+      room.phase = "in-game";
+      io.to(room.code).emit("game:started", { roomCode: room.code });
+      broadcastState(room);
+    }, COUNTDOWN_SECONDS * 1000 + 400);
+  });
+
+  socket.on("disconnect", () => {
+    const ctx = current(socket);
+    if (!ctx) return;
+    const { room, player } = ctx;
+    if (player.socketId !== socket.id) return;
+    player.isConnected = false;
+    io.to(room.code).emit("room:player-updated", { player: playerSnapshot(player, room) });
+    broadcastState(room);
+    player.dropTimer = setTimeout(() => removePlayer(room, player.id, "disconnected"), DISCONNECT_GRACE_MS);
+  });
+});
+
+console.log(`[mock] Pirate Protocol lobby stub listening on http://localhost:${PORT}`);
