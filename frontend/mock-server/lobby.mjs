@@ -79,6 +79,14 @@ function broadcastState(room) {
   io.to(room.code).emit("room:state", roomSnapshot(room));
 }
 
+function pushVoyage(room) {
+  if (!room.voyage) return;
+  for (const player of room.players.values()) {
+    const socket = io.sockets.sockets.get(player.socketId);
+    if (socket && player.isConnected) socket.emit("voyage:state", snapshotFor(room, player));
+  }
+}
+
 function seat(socket, room, player) {
   socket.join(room.code);
   socket.data = { roomCode: room.code, playerId: player.id };
@@ -89,6 +97,7 @@ function removePlayer(room, playerId, reason) {
   const player = room.players.get(playerId);
   if (!player) return;
   clearTimeout(player.dropTimer);
+  abandonDuty(room, playerId);
   room.players.delete(playerId);
   const s = io.sockets.sockets.get(player.socketId);
   if (s && s.data?.playerId === playerId) {
@@ -108,6 +117,7 @@ function removePlayer(room, playerId, reason) {
     io.to(room.code).emit("room:captain-changed", { captainId: next.id });
   }
   broadcastState(room);
+  pushVoyage(room);
 }
 
 function current(socket) {
@@ -173,6 +183,7 @@ io.on("connection", (socket) => {
     ack(seat(socket, room, player));
     socket.to(room.code).emit("room:player-updated", { player: playerSnapshot(player, room) });
     broadcastState(room);
+    pushVoyage(room);
   });
 
   socket.on("crew:leave", (_payload, ack) => {
@@ -209,11 +220,33 @@ io.on("connection", (socket) => {
     });
     broadcastState(room);
     setTimeout(() => {
-      if (!rooms.has(room.code)) return;
+      if (!rooms.has(room.code) || room.phase !== "starting") return;
       room.phase = "in-game";
+      beginVoyage(room);
       io.to(room.code).emit("game:started", { roomCode: room.code });
       broadcastState(room);
-    }, COUNTDOWN_SECONDS * 1000 + 400);
+      pushVoyage(room);
+      console.log(`[mock] ${room.crewName} (${room.code}) is underway`);
+    }, COUNTDOWN_SECONDS * 1000 + 200);
+  });
+
+  socket.on("game:sync", (_payload, ack) => {
+    const ctx = current(socket);
+    if (!ctx) return ack(fail("NOT_IN_ROOM"));
+    if (!ctx.room.voyage) return ack(fail("NOT_IN_GAME"));
+    ack(ok(snapshotFor(ctx.room, ctx.player)));
+  });
+
+  socket.on("game:act", (payload, ack) => {
+    const ctx = current(socket);
+    if (!ctx) return ack(fail("NOT_IN_ROOM"));
+    if (!ctx.room.voyage) return ack(fail("NOT_IN_GAME"));
+    const kind = payload?.kind;
+    if (kind !== "duty" && kind !== "chart") return ack(fail("INVALID_PAYLOAD"));
+    const result = act(ctx.room, ctx.player, payload);
+    ack(ok(result));
+    broadcastState(ctx.room);
+    pushVoyage(ctx.room);
   });
 
   socket.on("disconnect", () => {

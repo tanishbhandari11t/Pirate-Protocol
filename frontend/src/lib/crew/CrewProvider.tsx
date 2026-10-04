@@ -99,6 +99,18 @@ export function CrewProvider({ children }: { children: ReactNode }) {
   const setReady = useCallback((ready: boolean) => request("player:ready", { ready }), []);
   const startVoyage = useCallback(() => request("game:start", {}), []);
 
+  const syncVoyage = useCallback(async () => {
+    const res = await request("game:sync", {});
+    if (res.ok) dispatch({ type: "voyage-state", voyage: res.data });
+    return res;
+  }, []);
+
+  const actOnVoyage = useCallback(async (payload: GameActPayload) => {
+    const res = await request("game:act", payload);
+    if (res.ok) dispatch({ type: "voyage-state", voyage: res.data.voyage });
+    return res;
+  }, []);
+
   useEffect(() => {
     connectSocket();
     const at = () => Date.now();
@@ -130,6 +142,7 @@ export function CrewProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "voyage-starting", startsAt, seconds, at: at() }),
       ),
       onServerEvent("game:started", () => dispatch({ type: "voyage-started", at: at() })),
+      onServerEvent("voyage:state", (voyage) => dispatch({ type: "voyage-state", voyage })),
       onServerEvent("server:notice", ({ level, message }) =>
         notify({ tone: level, title: level === "info" ? "Word from the harbour" : "Harbour warning", message }),
       ),
@@ -174,8 +187,10 @@ export function CrewProvider({ children }: { children: ReactNode }) {
       leaveCrew,
       setReady,
       startVoyage,
+      syncVoyage,
+      actOnVoyage,
     }),
-    [state, me, createCrew, joinCrew, rejoinCrew, leaveCrew, setReady, startVoyage],
+    [state, me, createCrew, joinCrew, rejoinCrew, leaveCrew, setReady, startVoyage, syncVoyage, actOnVoyage],
   );
 
   return <CrewContext.Provider value={api}>{children}</CrewContext.Provider>;

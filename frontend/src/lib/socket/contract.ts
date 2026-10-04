@@ -64,6 +64,56 @@ export interface DutyOption {
 }
 
 /** This sailor's private watch. The correct answer stays on the server. */
+export interface MyDuty {
+  title: string;
+  /** Plain-language order telling this sailor exactly what to tap. */
+  orders: string;
+  options: DutyOption[];
+}
+
+export interface DutyProgress {
+  playerId: PlayerId;
+  playerName: string;
+  title: string;
+  done: boolean;
+  abandoned: boolean;
+  /** Revealed to the whole crew once the watch is kept. */
+  clue: string | null;
+}
+
+export interface ChartIsland {
+  id: string;
+  name: string;
+}
+
+/**
+ * Personal view of the living map. `yourOrders` is the one line this sailor
+ * should follow right now. Clues from other watches are public; answers are not.
+ */
+export interface VoyageSnapshot {
+  roomCode: RoomCode;
+  phase: VoyagePhase;
+  /** How the voyage works, shown the whole time. */
+  briefing: string;
+  /** The action this sailor should take right now. */
+  yourOrders: string;
+  duties: DutyProgress[];
+  myDuty: MyDuty | null;
+  chart: { prompt: string; islands: ChartIsland[] } | null;
+  strikes: number;
+  maxStrikes: number;
+  hoard: string | null;
+}
+
+export interface GameActPayload {
+  kind: "duty" | "chart";
+  choice: string;
+}
+
+export interface GameActResult {
+  correct: boolean;
+  message: string;
+  voyage: VoyageSnapshot;
 }
 
 /** Returned to a client once it holds a seat in a room. */
@@ -87,6 +137,7 @@ export type ErrorCode =
   | "NOT_ENOUGH_PLAYERS"
   | "PLAYERS_NOT_READY"
   | "SESSION_EXPIRED"
+  | "NOT_IN_GAME"
   | "RATE_LIMITED"
   | "INTERNAL";
 
@@ -130,6 +181,10 @@ export interface ClientRequests {
   "crew:leave": { req: EmptyPayload; res: null };
   "player:ready": { req: SetReadyPayload; res: PlayerSnapshot };
   "game:start": { req: EmptyPayload; res: null };
+  /** Current personal view of the voyage. Used after a refresh mid-game. */
+  "game:sync": { req: EmptyPayload; res: VoyageSnapshot };
+  /** Attempt the sailor's current order: keep a watch or name the island. */
+  "game:act": { req: GameActPayload; res: GameActResult };
 }
 
 export type ClientRequestName = keyof ClientRequests;
@@ -150,6 +205,8 @@ export interface ServerEvents {
   /** Captain launched the voyage; clients show a countdown until `startsAt` (epoch ms). */
   "game:starting": { startsAt: number; seconds: number };
   "game:started": { roomCode: RoomCode };
+  /** Personal voyage view. Emitted to each sailor separately — duties differ. */
+  "voyage:state": VoyageSnapshot;
   "server:notice": { level: "info" | "warning" | "danger"; message: string };
 }
 

@@ -4,22 +4,80 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TopBar } from "@/components/layout/TopBar";
 import { Badge } from "@/components/ui/Ornaments";
-import { ParchmentCard } from "@/components/ui/ParchmentCard";
+import { LoadingScreen } from "@/components/ui/Loader";
+import { useNotify } from "@/components/ui/Notifications";
+import { VoyageBoard } from "@/components/voyage/VoyageBoard";
 import { useCrew } from "@/lib/crew/CrewProvider";
 import { bareShipName } from "@/lib/names";
+import { describeError } from "@/lib/socket/errors";
+import { seatStore } from "@/lib/storage";
 import { sanitizeRoomCode } from "@/lib/validation";
 
 /**
- * Landing point after `game:started`. The interactive game board replaces this screen in Phase 2;
- * until then it only confirms the crew made it out of harbour.
+ * The living map. After the crew sets sail, every sailor sees their own orders
+ * and the shared watch list, then names the island and digs up the hoard.
  */
 export default function VoyagePage() {
   const params = useParams<{ code: string }>();
   const code = sanitizeRoomCode(params.code ?? "");
   const router = useRouter();
-  const { state, leaveCrew } = useCrew();
+  const { notify } = useNotify();
+  const { state, rejoinCrew, leaveCrew, syncVoyage, actOnVoyage } = useCrew();
+  const seat = useSyncExternalStore(seatStore.subscribe, seatStore.getSnapshot, seatStore.getServerSnapshot);
+
+  const [pending, setPending] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const crewName = state.room?.code === code ? state.room.crewName : null;
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [syncFailed, setSyncFailed] = useState(false);
+  const rejoinAttempted = useRef(false);
+  const syncAttempted = useRef(false);
+
+  const room = state.room?.code === code ? state.room : null;
+  const voyage = state.voyage?.roomCode === code ? state.voyage : null;
+  const hasSeat = seat?.roomCode === code;
+
+  useEffect(() => {
+    if (room || leaving) return;
+    if (!hasSeat) {
+      router.replace(`/crew/join?code=${code}`);
+      return;
+    }
+    if (rejoinAttempted.current) return;
+    rejoinAttempted.current = true;
+    rejoinCrew(code).then((res) => {
+      if (!res.ok) {
+        notify({ tone: "danger", title: "Could not reclaim your berth", message: describeError(res.error.code) });
+        router.replace(`/crew/join?code=${code}`);
+      }
+    });
+  }, [room, hasSeat, code, leaving, rejoinCrew, router, notify]);
+
+  useEffect(() => {
+    if (room && room.phase === "lobby" && !state.voyageStarted) router.replace(`/lobby/${code}`);
+  }, [room, state.voyageStarted, code, router]);
+
+  useEffect(() => {
+    if (!room || voyage || room.phase === "lobby") return;
+    if (syncAttempted.current) return;
+    syncAttempted.current = true;
+    syncVoyage().then((res) => {
+      if (!res.ok) setSyncFailed(true);
+    });
+  }, [room, voyage, syncVoyage]);
+
+  const act = async (payload: Parameters<typeof actOnVoyage>[0]) => {
+    setPending(true);
+    const res = await actOnVoyage(payload);
+    setPending(false);
+    if (!res.ok) {
+      const text = describeError(res.error.code);
+      setFeedback({ ok: false, text });
+      notify({ tone: "danger", title: "Order refused", message: text });
+      return;
+    }
+    setFeedback({ ok: res.data.correct, text: res.data.message });
+    if (!res.data.correct) notify({ tone: "warning", title: "Not that", message: res.data.message });
+  };
 
   const leave = async () => {
     setLeaving(true);
@@ -27,51 +85,35 @@ export default function VoyagePage() {
     router.push("/");
   };
 
+  if (!room || !voyage) {
+    return (
+      <LoadingScreen
+        show
+        message={syncFailed ? "The map stayed dark" : "The map is waking"}
+        detail={
+          syncFailed
+            ? "The harbour did not send your orders. Return to the ship and set sail again."
+            : room
+              ? `Unrolling orders for the ${bareShipName(room.crewName)}…`
+              : "Reclaiming your berth…"
+        }
+      />
+    );
+  }
+
   return (
     <main className="flex min-h-dvh flex-col">
       <TopBar>
         <Badge tone="kelp">Ship {code}</Badge>
       </TopBar>
-      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-4 pb-8 sm:px-6">
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1 }}
-          className="mb-[clamp(1rem,3vh,2rem)] text-center"
-        >
-          <p className="font-ui text-[0.6rem] uppercase tracking-[0.3em] text-brass/80 sm:text-[0.65rem] sm:tracking-[0.45em]">
-            {crewName ? `The ${bareShipName(crewName)} has set sail` : "Your crew has set sail"}
-          </p>
-          <h1 className="mt-2 font-display text-[clamp(2.25rem,min(8vw,7vh),3.75rem)] leading-tight text-gilded">
-            The Map Awakens
-          </h1>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, rotateX: 50, y: 40 }}
-          animate={{ opacity: 1, rotateX: 0, y: 0 }}
-          transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
-          style={{
-            transformPerspective: 1400,
-            maxWidth: "max(18rem, min(100%, calc((100dvh - 22rem) * 1.5)))",
-          }}
-          className="w-full"
-        >
-          <ParchmentCard padded={false} className="w-full">
-            <div className="p-3 sm:p-5 md:p-8 short:md:p-5">
-              <TreasureMapSketch />
-            </div>
-          </ParchmentCard>
-        </motion.div>
-
-        <p className="mt-[clamp(1rem,3vh,2rem)] max-w-xl text-center font-body text-base italic text-parchment/70 sm:text-lg">
-          The cartographers are still inking the living map. When the board is ready, your crew will be
-          brought here to hunt.
-        </p>
-        <Button variant="ghost" className="mt-4 short:mt-3" icon={<DoorIcon size={14} />} onClick={leave} loading={leaving}>
-          Return to the harbour
-        </Button>
-      </div>
+      <VoyageBoard
+        voyage={voyage}
+        pending={pending}
+        feedback={feedback}
+        leaving={leaving}
+        onAct={(kind, choice) => act({ kind, choice })}
+        onLeave={leave}
+      />
     </main>
   );
 }

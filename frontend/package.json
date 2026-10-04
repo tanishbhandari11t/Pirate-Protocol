@@ -8,9 +8,6 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:mp": "vitest run --config vitest.multiplayer.config.mts",
     "mock:server": "node mock-server/lobby.mjs"
   },
   "dependencies": {
@@ -30,7 +27,6 @@
     "eslint-config-next": "16.3.6",
     "socket.io": "^4.8.4",
     "tailwindcss": "^4",
-    "typescript": "^5",
-    "vitest": "^3.2.7"
+    "typescript": "^5"
   }
 }

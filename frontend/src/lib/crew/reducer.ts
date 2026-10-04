@@ -71,11 +71,15 @@ export function crewReducer(state: CrewState, action: CrewAction): CrewState {
     case "seated": {
       const { room, playerId } = action.grant;
       const me = room.players.find((p) => p.id === playerId);
+      const sameRoom = state.room?.code === room.code;
+      const underway = room.phase === "in-game" || room.phase === "finished";
       const base: CrewState = {
         ...initialCrewState,
         room,
         playerId,
-        log: state.room?.code === room.code ? state.log : [],
+        voyage: sameRoom ? state.voyage : null,
+        voyageStarted: underway || (sameRoom && state.voyageStarted),
+        log: sameRoom ? state.log : [],
         logSeq: state.logSeq,
       };
       return appendLog(base, action.at, "join", `${me?.name ?? "You"} came aboard the ${bareShipName(room.crewName)}.`);
@@ -161,6 +165,10 @@ export function crewReducer(state: CrewState, action: CrewAction): CrewState {
         countdown: null,
         room: state.room ? { ...state.room, phase: "in-game" } : state.room,
       };
+
+    case "voyage-state":
+      if (state.room && action.voyage.roomCode !== state.room.code) return state;
+      return { ...state, voyage: action.voyage, voyageStarted: true };
 
     case "reset":
       return { ...initialCrewState, logSeq: state.logSeq };
