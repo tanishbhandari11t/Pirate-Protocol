@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { InventoryView, PresenceChanged, RoomState, SharedRoomState } from '../rooms/room.types';
+import { GameEventView } from '../common/game-events';
+import { InventoryView, LobbyRoomSnapshot, PresenceChanged, RoomState, SharedRoomState, VaultSummary } from '../rooms/room.types';
 
 export type RealtimeMessage =
   | {
@@ -7,9 +8,13 @@ export type RealtimeMessage =
       code: string;
       shared: SharedRoomState;
       inventoryByUserId: Record<string, InventoryView[]>;
+      vaultByUserId: Record<string, VaultSummary>;
       fresh: RoomState['log'];
     }
-  | { kind: 'presence'; code: string; presence: PresenceChanged };
+  | { kind: 'lobby'; code: string; snapshot: LobbyRoomSnapshot }
+  | { kind: 'presence'; code: string; presence: PresenceChanged }
+  | { kind: 'alias'; code: string; event: string; payload: Record<string, unknown> }
+  | { kind: 'notice'; code: string; message: string };
 
 type Listener = (message: RealtimeMessage) => void;
 
@@ -26,3 +31,5 @@ export class RealtimeBus {
     return () => this.listeners.delete(listener);
   }
 }
+
+export type { GameEventView };

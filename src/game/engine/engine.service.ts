@@ -7,9 +7,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
-import { GameEventType, GameEventView, toEventView } from '../../common/game-events';
+import { GameEventType, GameEventView, asRecord, toEventView } from '../../common/game-events';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RoomStateService } from '../../rooms/room-state.service';
+import { ISLAND_ARRIVAL_NOTICE, ISLAND_CLUE } from '../adventure/notices';
 import { InventoryService } from '../inventory/inventory.service';
 import { MapService } from '../map/map.service';
 import { PuzzleService } from '../puzzles/puzzles.service';
@@ -21,6 +22,8 @@ type Tx = Prisma.TransactionClient;
 
 @Injectable()
 export class GameEngine {
+  private cachedPepper: string | undefined;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly rooms: RoomStateService,
@@ -35,30 +38,58 @@ export class GameEngine {
 
   async move(userId: string, code: string, islandKey: string) {
     const fresh = await this.prisma.$transaction(async (tx) => {
-      const player = await this.lockPlayer(tx, userId, code);
+      const player = await this.requirePlayer(tx, userId, code);
+      this.assertPlayable(player.room.status);
+      const fromKey = player.currentIsland?.key ?? null;
+      this.map.assertTravel(fromKey, islandKey);
+      if (fromKey === islandKey) return null;
+
       const island = await this.map.findByKey(tx, islandKey);
       if (!island) throw new NotFoundException('Island not found');
-      await tx.player.update({ where: { id: player.id }, data: { currentIslandId: island.id } });
-      await this.markActive(tx, player.roomId, player.room.status);
-      const event = await tx.gameEvent.create({
-        data: {
-          roomId: player.roomId,
-          playerId: player.id,
-          type: GameEventType.MOVED,
-          payload: { islandKey: island.key },
-        },
+
+      await tx.player.update({
+        where: { id: player.id },
+        data: { currentIslandId: island.id, lastSeenAt: new Date() },
       });
-      return [toEventView(event)];
+
+      const events: GameEventView[] = [
+        toEventView(
+          await tx.gameEvent.create({
+            data: {
+              roomId: player.roomId,
+              playerId: player.id,
+              type: GameEventType.MOVED,
+              payload: { islandKey: island.key, fromIslandKey: fromKey },
+            },
+          }),
+        ),
+      ];
+      events.push(...(await this.recordIslandAdventure(tx, player.roomId, player.id, island.key)));
+      return events;
+    });
+    if (!fresh) return this.rooms.forUser(code, userId);
+    return this.rooms.publish(code, userId, fresh);
+  }
+
+  async explore(userId: string, code: string, islandKey: string) {
+    const fresh = await this.prisma.$transaction(async (tx) => {
+      const player = await this.requirePlayer(tx, userId, code);
+      this.assertPlayable(player.room.status);
+      if (player.currentIsland?.key !== islandKey) {
+        throw new BadRequestException('You must be on that island to explore it');
+      }
+      return this.recordIslandAdventure(tx, player.roomId, player.id, islandKey, true);
     });
     return this.rooms.publish(code, userId, fresh);
   }
 
   async submitAnswer(userId: string, code: string, puzzleKey: string, answer: string) {
     const fresh = await this.prisma.$transaction(async (tx) => {
-      const player = await this.lockPlayer(tx, userId, code);
+      const player = await this.requirePlayer(tx, userId, code);
       if (player.room.status === 'FINISHED') {
         throw new BadRequestException('The treasure has already been claimed');
       }
+      this.assertPlayable(player.room.status);
       const puzzle = await this.puzzles.findByKey(tx, puzzleKey);
       if (!puzzle) throw new NotFoundException('Puzzle not found');
       if (await this.puzzles.isSolved(tx, player.roomId, player.id, puzzle.key)) {
@@ -73,7 +104,6 @@ export class GameEngine {
       if (!correct) return this.failPuzzle(tx, player, puzzle);
 
       const events: GameEventView[] = [];
-      await this.markActive(tx, player.roomId, player.room.status);
       events.push(
         toEventView(
           await tx.gameEvent.create({
@@ -116,7 +146,8 @@ export class GameEngine {
   async trade(userId: string, code: string, toPlayerId: string, itemKey: string) {
     this.trading.assertTradable(itemKey);
     const fresh = await this.prisma.$transaction(async (tx) => {
-      const sender = await this.lockPlayer(tx, userId, code);
+      const sender = await this.requirePlayer(tx, userId, code);
+      this.assertPlayable(sender.room.status);
       if (sender.id === toPlayerId) throw new BadRequestException('Choose another sailor');
       const recipient = await tx.player.findFirst({
         where: { id: toPlayerId, roomId: sender.roomId, status: 'ACTIVE' },
@@ -137,6 +168,93 @@ export class GameEngine {
       return [toEventView(event)];
     });
     return this.rooms.publish(code, userId, fresh);
+  }
+
+  private async recordIslandAdventure(
+    tx: Tx,
+    roomId: string,
+    playerId: string,
+    islandKey: string,
+    forceExplore = false,
+  ): Promise<GameEventView[]> {
+    const prior = await tx.gameEvent.findMany({
+      where: {
+        roomId,
+        playerId,
+        type: { in: [GameEventType.ISLAND_DISCOVERED, GameEventType.ISLAND_EXPLORED] },
+      },
+      select: { type: true, payload: true },
+    });
+    const hasDiscovered = prior.some(
+      (e) => e.type === GameEventType.ISLAND_DISCOVERED && asRecord(e.payload).islandKey === islandKey,
+    );
+    const hasExplored = prior.some(
+      (e) => e.type === GameEventType.ISLAND_EXPLORED && asRecord(e.payload).islandKey === islandKey,
+    );
+
+    const events: GameEventView[] = [];
+    if (!hasDiscovered) {
+      events.push(
+        toEventView(
+          await tx.gameEvent.create({
+            data: {
+              roomId,
+              playerId,
+              type: GameEventType.ISLAND_DISCOVERED,
+              payload: { islandKey },
+            },
+          }),
+        ),
+      );
+    }
+
+    if (!hasExplored || forceExplore) {
+      if (!hasExplored) {
+        events.push(
+          toEventView(
+            await tx.gameEvent.create({
+              data: {
+                roomId,
+                playerId,
+                type: GameEventType.ISLAND_EXPLORED,
+                payload: { islandKey },
+              },
+            }),
+          ),
+        );
+      }
+      const notice = ISLAND_ARRIVAL_NOTICE[islandKey];
+      if (notice) {
+        events.push(
+          toEventView(
+            await tx.gameEvent.create({
+              data: {
+                roomId,
+                playerId,
+                type: GameEventType.ADVENTURE_NOTICE,
+                payload: { islandKey, text: notice },
+              },
+            }),
+          ),
+        );
+      }
+      const clue = ISLAND_CLUE[islandKey];
+      if (clue && !hasExplored) {
+        events.push(
+          toEventView(
+            await tx.gameEvent.create({
+              data: {
+                roomId,
+                playerId,
+                type: GameEventType.CLUE_FOUND,
+                payload: { islandKey, text: clue },
+              },
+            }),
+          ),
+        );
+      }
+    }
+    return events;
   }
 
   private async failPuzzle(
@@ -187,29 +305,27 @@ export class GameEngine {
     );
   }
 
-  private async markActive(tx: Tx, roomId: string, status: string) {
-    if (status === 'LOBBY') {
-      await tx.room.update({ where: { id: roomId }, data: { status: 'ACTIVE' } });
+  private assertPlayable(status: string) {
+    if (status !== 'ACTIVE') {
+      throw new BadRequestException('The voyage has not begun yet');
     }
   }
 
   private pepper() {
-    return this.config.getOrThrow<string>('APP_SECRET');
+    return (this.cachedPepper ??= this.config.getOrThrow<string>('APP_SECRET'));
   }
 
-  private async lockPlayer(tx: Tx, userId: string, code: string) {
-    const room = await tx.room.findUnique({ where: { code } });
-    if (!room) throw new NotFoundException('Room not found');
-    const existing = await tx.player.findUnique({
-      where: { userId_roomId: { userId, roomId: room.id } },
+  private async requirePlayer(tx: Tx, userId: string, code: string) {
+    const player = await tx.player.findFirst({
+      where: { userId, status: 'ACTIVE', room: { code } },
+      include: { room: true, inventory: true, currentIsland: { select: { key: true } } },
     });
-    if (!existing || existing.status !== 'ACTIVE') throw new ForbiddenException('Join the crew first');
-    if (existing.isEliminated) throw new ForbiddenException('A trap has taken you out of the hunt');
-
-    return tx.player.update({
-      where: { id: existing.id },
-      data: { lastSeenAt: new Date() },
-      include: { room: true, inventory: true },
-    });
+    if (!player) {
+      const room = await tx.room.findUnique({ where: { code }, select: { id: true } });
+      if (!room) throw new NotFoundException('Room not found');
+      throw new ForbiddenException('Join the crew first');
+    }
+    if (player.isEliminated) throw new ForbiddenException('A trap has taken you out of the hunt');
+    return player;
   }
 }

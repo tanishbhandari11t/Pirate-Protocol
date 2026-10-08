@@ -6,6 +6,12 @@ export class MoveDto {
   islandKey!: string;
 }
 
+export class ExploreDto {
+  @IsString()
+  @Matches(/^[a-z0-9-]{3,40}$/)
+  islandKey!: string;
+}
+
 export class AnswerDto {
   @IsString()
   @Matches(/^[a-z0-9-]{3,40}$/)

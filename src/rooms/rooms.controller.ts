@@ -4,12 +4,16 @@ import { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../common/decorators/current-user';
 import { CreateRoomDto, JoinRoomDto, PresenceDto } from './dto/room.dto';
 import { RoomCodePipe } from './room-code.pipe';
+import { LobbyService } from '../lobby/lobby.service';
 import { RoomsService } from './rooms.service';
 
 @Controller('rooms')
 @UseGuards(AuthGuard)
 export class RoomsController {
-  constructor(private readonly rooms: RoomsService) {}
+  constructor(
+    private readonly rooms: RoomsService,
+    private readonly lobby: LobbyService,
+  ) {}
 
   @Post()
   @HttpCode(201)
@@ -32,6 +36,18 @@ export class RoomsController {
   @Get(':code')
   get(@CurrentUser() user: AuthUser, @Param('code', RoomCodePipe) code: string) {
     return this.rooms.get(user.userId, code);
+  }
+
+  @Post(':code/ready')
+  @HttpCode(200)
+  setReady(@CurrentUser() user: AuthUser, @Param('code', RoomCodePipe) code: string, @Body() body: { ready: boolean }) {
+    return this.lobby.setReady(user.userId, code, Boolean(body?.ready));
+  }
+
+  @Post(':code/voyage/start')
+  @HttpCode(200)
+  startVoyage(@CurrentUser() user: AuthUser, @Param('code', RoomCodePipe) code: string) {
+    return this.lobby.startVoyage(user.userId, code);
   }
 
   @Post(':code/presence')

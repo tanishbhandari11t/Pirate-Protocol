@@ -23,6 +23,12 @@ export class WsMoveDto extends RoomCodeDto {
   islandKey!: string;
 }
 
+export class WsExploreDto extends RoomCodeDto {
+  @IsString()
+  @Matches(/^[a-z0-9-]{3,40}$/)
+  islandKey!: string;
+}
+
 export class WsAnswerDto extends RoomCodeDto {
   @IsString()
   @Matches(/^[a-z0-9-]{3,40}$/)

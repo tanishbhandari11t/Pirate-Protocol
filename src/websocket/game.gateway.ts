@@ -14,10 +14,15 @@ import { AuthService } from '../auth/auth.service';
 import { errorText } from '../common/error-text';
 import { parseDto } from '../common/parse-dto';
 import { GameEngine } from '../game/engine/engine.service';
+import { destinationsFrom } from '../game/map/routes';
+import { LOBBY_AVATARS } from '../lobby/lobby.constants';
+import { LobbyService } from '../lobby/lobby.service';
+import { ackFail } from '../lobby/lobby.types';
 import { PlayersService } from '../players/players.service';
 import { CreateRoomDto } from '../rooms/dto/room.dto';
 import { RoomsService } from '../rooms/rooms.service';
-import { WsAnswerDto, WsJoinDto, WsLeaveDto, WsMoveDto, WsPresenceDto, WsTradeDto } from './dto';
+import { WsAnswerDto, WsExploreDto, WsJoinDto, WsLeaveDto, WsMoveDto, WsPresenceDto, WsTradeDto } from './dto';
+import { aliasesFor } from './event-aliases';
 import { ClientEvents, ServerEvents } from './events';
 import { RealtimeBus } from './realtime-bus';
 
@@ -41,29 +46,52 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private readonly rooms: RoomsService,
     private readonly players: PlayersService,
     private readonly engine: GameEngine,
+    private readonly lobby: LobbyService,
     private readonly bus: RealtimeBus,
   ) {}
 
   onModuleInit() {
     this.unsubscribe = this.bus.subscribe((message) => {
+      const room = this.channel(message.code);
       if (message.kind === 'presence') {
-        this.server.to(this.channel(message.code)).emit(ServerEvents.PRESENCE, message.presence);
+        this.server.to(room).emit(ServerEvents.PRESENCE, message.presence);
+        return;
+      }
+      if (message.kind === 'lobby') {
+        this.server.to(room).emit(ServerEvents.STATE, message.snapshot);
+        return;
+      }
+      if (message.kind === 'notice') {
+        this.server.to(room).emit(ServerEvents.NOTICE, { message: message.message, code: message.code });
+        return;
+      }
+      if (message.kind === 'alias') {
+        this.server.to(room).emit(message.event, message.payload);
         return;
       }
 
-      const members = this.server.sockets.adapter.rooms.get(this.channel(message.code));
+      // Room-wide events once; you / vault / destinations stay per-socket.
+      for (const event of message.fresh) {
+        this.server.to(room).emit(ServerEvents.EVENT, { ...event, code: message.code });
+        for (const alias of aliasesFor(event, message.code)) {
+          this.server.to(room).emit(alias.event, alias.payload);
+        }
+      }
+
+      const members = this.server.sockets.adapter.rooms.get(room);
       if (!members) return;
       for (const id of members) {
         const socket = this.server.sockets.sockets.get(id) as GameSocket | undefined;
         const userId = socket?.data.userId;
         if (!socket || !userId) continue;
+        const islandKey =
+          message.shared.players.find((p) => p.userId === userId)?.currentIslandKey ?? null;
         socket.emit(ServerEvents.STATE, {
           ...message.shared,
+          destinations: destinationsFrom(islandKey),
           you: message.inventoryByUserId[userId] ?? [],
+          vault: message.vaultByUserId[userId] ?? { ready: false, missingRelics: [] },
         });
-        for (const event of message.fresh) {
-          socket.emit(ServerEvents.EVENT, { ...event, code: message.code });
-        }
       }
     });
   }
@@ -73,8 +101,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect, On
   }
 
   async handleConnection(client: GameSocket) {
+    const token = this.readTokenOptional(client);
+    if (!token) return;
     try {
-      const user = this.auth.verify(this.readToken(client));
+      const user = this.auth.verify(token);
       client.data.userId = user.userId;
       this.connections.set(user.userId, (this.connections.get(user.userId) ?? 0) + 1);
     } catch (error) {
@@ -100,6 +130,63 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     } catch (error) {
       this.logger.warn(errorText(error));
     }
+  }
+
+  @SubscribeMessage(ClientEvents.CREW_CREATE)
+  async crewCreate(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
+    const payload = body as { playerName?: string; crewName?: string; avatarId?: string };
+    if (!payload?.playerName || !payload?.crewName || !payload?.avatarId || !LOBBY_AVATARS.has(payload.avatarId)) {
+      return ackFail('INVALID_PAYLOAD');
+    }
+    const result = await this.lobby.createCrew(payload.playerName, payload.crewName, payload.avatarId);
+    if (result.ok) {
+      client.data.userId = result.data.userId;
+      this.connections.set(result.data.userId, (this.connections.get(result.data.userId) ?? 0) + 1);
+      await client.join(this.channel(result.data.room.code));
+    }
+    return result;
+  }
+
+  @SubscribeMessage(ClientEvents.CREW_JOIN)
+  async crewJoin(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
+    const payload = body as { playerName?: string; roomCode?: string; avatarId?: string };
+    if (!payload?.playerName || !payload?.roomCode || !payload?.avatarId || !LOBBY_AVATARS.has(payload.avatarId)) {
+      return ackFail('INVALID_PAYLOAD');
+    }
+    const result = await this.lobby.joinCrew(payload.playerName, payload.roomCode, payload.avatarId);
+    if (result.ok) {
+      client.data.userId = result.data.userId;
+      this.connections.set(result.data.userId, (this.connections.get(result.data.userId) ?? 0) + 1);
+      await client.join(this.channel(result.data.room.code));
+    }
+    return result;
+  }
+
+  @SubscribeMessage(ClientEvents.CREW_LEAVE)
+  crewLeave(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
+    return this.run(client, async () => {
+      const payload = body as { roomCode?: string; code?: string };
+      const code = String(payload?.roomCode ?? payload?.code ?? '').toUpperCase();
+      return this.lobby.leaveCrew(this.userId(client), code);
+    });
+  }
+
+  @SubscribeMessage(ClientEvents.CREW_READY)
+  crewReady(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
+    return this.run(client, async () => {
+      const payload = body as { roomCode?: string; code?: string; ready?: boolean };
+      const code = String(payload?.roomCode ?? payload?.code ?? '').toUpperCase();
+      return this.lobby.setReady(this.userId(client), code, Boolean(payload?.ready));
+    });
+  }
+
+  @SubscribeMessage(ClientEvents.CREW_START)
+  crewStart(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
+    return this.run(client, async () => {
+      const payload = body as { roomCode?: string; code?: string };
+      const code = String(payload?.roomCode ?? payload?.code ?? '').toUpperCase();
+      return this.lobby.startVoyage(this.userId(client), code);
+    });
   }
 
   @SubscribeMessage(ClientEvents.CREATE)
@@ -150,6 +237,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     });
   }
 
+  @SubscribeMessage(ClientEvents.EXPLORE)
+  explore(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
+    return this.run(client, async () => {
+      const dto = await parseDto(WsExploreDto, body);
+      await client.join(this.channel(dto.code));
+      return this.engine.explore(this.userId(client), dto.code, dto.islandKey);
+    });
+  }
+
   @SubscribeMessage(ClientEvents.ANSWER)
   answer(@ConnectedSocket() client: GameSocket, @MessageBody() body: unknown) {
     return this.run(client, async () => {
@@ -175,22 +271,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect, On
   private userId(client: GameSocket) {
     const userId = client.data.userId;
     if (!userId) {
-      client.disconnect(true);
-      throw new Error('Unauthorized');
+      throw new WsException('Unauthorized');
     }
     return userId;
   }
 
-  private readToken(client: Socket) {
+  private readTokenOptional(client: Socket) {
     const authToken = client.handshake.auth?.token;
     if (typeof authToken === 'string' && authToken) return authToken;
     const header = client.handshake.headers.authorization;
     if (typeof header === 'string' && header.startsWith('Bearer ')) return header.slice('Bearer '.length);
-    throw new Error('Unauthorized');
+    return null;
   }
 
   private async run<T>(client: GameSocket, work: () => Promise<T>): Promise<T> {
     try {
+      if (!client.data.userId) {
+        const token = this.readTokenOptional(client);
+        if (token) client.data.userId = this.auth.verify(token).userId;
+      }
       return await work();
     } catch (error) {
       const message = errorText(error);

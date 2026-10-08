@@ -55,12 +55,14 @@ describe('crew flow', () => {
     const hostPlayer = quiet.body.players.find((player: { userId: string }) => player.userId === host.body.user.id);
     expect(hostPlayer.isOnline).toBe(false);
 
-    await request(server).post(`/rooms/${code}/leave`).set(auth(mate.body.token)).expect(200);
-    const left = await request(server).get(`/rooms/${code}`).set(auth(host.body.token)).expect(200);
-    expect(left.body.players).toHaveLength(1);
-    expect(left.body.you).toEqual([]);
+    await request(server).post(`/rooms/${code}/ready`).set(auth(host.body.token)).send({ ready: true }).expect(200);
+    await request(server).post(`/rooms/${code}/ready`).set(auth(mate.body.token)).send({ ready: true }).expect(200);
+    await request(server).post(`/rooms/${code}/voyage/start`).set(auth(host.body.token)).expect(200);
+    await new Promise((r) => setTimeout(r, 3_500));
 
-    const island = left.body.islands[0] as { key: string; puzzles: { key: string }[] } | undefined;
+    const island = together.body.islands.find((i: { key: string }) => i.key === 'port-royal') as
+      | { key: string; puzzles: { key: string }[] }
+      | undefined;
     if (!island) return;
 
     const moved = await request(server)
@@ -69,6 +71,7 @@ describe('crew flow', () => {
       .send({ islandKey: island.key })
       .expect(200);
     expect(moved.body.status).toBe('ACTIVE');
+    expect(moved.body.phase).toBe('voyage');
 
     const puzzleKey = island.puzzles[0]?.key;
     if (!puzzleKey) return;
@@ -81,5 +84,9 @@ describe('crew flow', () => {
     const types = (failed.body.log as { type: string }[]).map((event) => event.type);
     expect(types).toEqual(expect.arrayContaining([expect.stringMatching(/PUZZLE_FAILED|TRAP_TRIGGERED/)]));
     expect(JSON.stringify(failed.body)).not.toContain('answerHash');
+
+    await request(server).post(`/rooms/${code}/leave`).set(auth(mate.body.token)).expect(200);
+    const left = await request(server).get(`/rooms/${code}`).set(auth(host.body.token)).expect(200);
+    expect(left.body.players).toHaveLength(1);
   });
 });

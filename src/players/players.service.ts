@@ -7,17 +7,20 @@ export class PlayersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async setPresence(userId: string, code: string, online: boolean): Promise<PresenceChanged> {
-    const room = await this.prisma.room.findUnique({ where: { code } });
-    if (!room) throw new NotFoundException('Room not found');
-
-    const player = await this.prisma.player.findUnique({
-      where: { userId_roomId: { userId, roomId: room.id } },
+    const player = await this.prisma.player.findFirst({
+      where: { userId, status: 'ACTIVE', room: { code } },
+      select: { id: true },
     });
-    if (!player || player.status !== 'ACTIVE') throw new ForbiddenException('Join the crew first');
+    if (!player) {
+      const room = await this.prisma.room.findUnique({ where: { code }, select: { id: true } });
+      if (!room) throw new NotFoundException('Room not found');
+      throw new ForbiddenException('Join the crew first');
+    }
 
     const updated = await this.prisma.player.update({
       where: { id: player.id },
       data: { isOnline: online, lastSeenAt: new Date() },
+      select: { id: true, isOnline: true, lastSeenAt: true },
     });
 
     return {
@@ -33,7 +36,7 @@ export class PlayersService {
   async markAllOffline(userId: string): Promise<PresenceChanged[]> {
     const rows = await this.prisma.player.findMany({
       where: { userId, status: 'ACTIVE', isOnline: true },
-      include: { room: { select: { code: true } } },
+      select: { id: true, room: { select: { code: true } } },
     });
     if (!rows.length) return [];
 

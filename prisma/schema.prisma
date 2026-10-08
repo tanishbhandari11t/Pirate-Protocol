@@ -9,6 +9,7 @@ datasource db {
 
 enum RoomStatus {
   LOBBY
+  COUNTDOWN
   ACTIVE
   FINISHED
 }
@@ -38,10 +39,12 @@ model Room {
   name       String
   status     RoomStatus  @default(LOBBY)
   maxPlayers Int         @default(6)
-  hostId     String
-  host       User        @relation("RoomHost", fields: [hostId], references: [id])
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  hostId           String
+  host             User        @relation("RoomHost", fields: [hostId], references: [id])
+  countdownEndsAt  DateTime?
+  voyageStartedAt  DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
   players    Player[]
   events     GameEvent[]
 }
@@ -56,6 +59,9 @@ model Player {
   isHost          Boolean      @default(false)
   isOnline        Boolean      @default(true)
   isEliminated    Boolean      @default(false)
+  isReady         Boolean      @default(false)
+  avatarId        String?
+  displayName     String?
   strikes         Int          @default(0)
   lastSeenAt      DateTime     @default(now())
   currentIslandId String?
@@ -66,6 +72,7 @@ model Player {
 
   @@unique([userId, roomId])
   @@index([roomId, status])
+  @@index([userId, status])
 }
 
 model Island {
@@ -119,4 +126,6 @@ model GameEvent {
   createdAt DateTime @default(now())
 
   @@index([roomId, createdAt])
+  @@index([roomId, type])
+  @@index([roomId, playerId, type])
 }

@@ -3,7 +3,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../common/decorators/current-user';
 import { RoomCodePipe } from '../rooms/room-code.pipe';
-import { AnswerDto, MoveDto, TradeDto } from './dto/intent.dto';
+import { AnswerDto, ExploreDto, MoveDto, TradeDto } from './dto/intent.dto';
 import { GameEngine } from './engine/engine.service';
 
 @Controller('rooms')
@@ -15,6 +15,12 @@ export class GameController {
   @HttpCode(200)
   move(@CurrentUser() user: AuthUser, @Param('code', RoomCodePipe) code: string, @Body() dto: MoveDto) {
     return this.engine.move(user.userId, code, dto.islandKey);
+  }
+
+  @Post(':code/explore')
+  @HttpCode(200)
+  explore(@CurrentUser() user: AuthUser, @Param('code', RoomCodePipe) code: string, @Body() dto: ExploreDto) {
+    return this.engine.explore(user.userId, code, dto.islandKey);
   }
 
   @Post(':code/answer')
